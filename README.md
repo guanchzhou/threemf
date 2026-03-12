@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/platform-macOS%2026+-black?style=flat-square&logo=apple" alt="Platform">
   <img src="https://img.shields.io/badge/arch-Apple%20Silicon-black?style=flat-square&logo=apple" alt="Apple Silicon">
   <a href="https://github.com/guanchzhou/threemf/releases/latest"><img src="https://img.shields.io/github/downloads/guanchzhou/threemf/total?style=flat-square&color=green" alt="Downloads"></a>
-  <img src="https://img.shields.io/badge/SLSA-Level%202-brightgreen?style=flat-square" alt="SLSA L3">
+  <img src="https://img.shields.io/badge/SLSA-Level%202-brightgreen?style=flat-square" alt="SLSA L2">
 </p>
 
 <p align="center">Quick Look plugin for previewing <code>.3mf</code> and <code>.stl</code> 3D printing files on macOS.<br>Press Space in Finder to see interactive 3D previews — no need to open a slicer.</p>
