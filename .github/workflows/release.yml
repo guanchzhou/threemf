@@ -1,0 +1,146 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build
+        run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFQuickLook -configuration Release build
+
+      - name: Run tests
+        run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFTests -configuration Debug test
+
+      - name: Import signing certificate
+        env:
+          CERTIFICATE_P12_BASE64: ${{ secrets.CERTIFICATE_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+
+          echo "$CERTIFICATE_P12_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+
+          security create-keychain -p "" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+      - name: Sign app
+        run: |
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "threemf.app" -path "*/Release/*" | head -1)
+          echo "Signing $APP_PATH"
+
+          codesign --force --options runtime \
+            --sign "Developer ID Application: Andrei Maltsev (DDZR8BZJYU)" \
+            --entitlements Sources/ThumbnailExtension/ThumbnailExtension.entitlements \
+            "$APP_PATH/Contents/PlugIns/ThreeMFThumbnailExtension.appex"
+
+          codesign --force --options runtime \
+            --sign "Developer ID Application: Andrei Maltsev (DDZR8BZJYU)" \
+            --entitlements Sources/PreviewExtension/PreviewExtension.entitlements \
+            "$APP_PATH/Contents/PlugIns/ThreeMFPreviewExtension.appex"
+
+          codesign --force --options runtime \
+            --sign "Developer ID Application: Andrei Maltsev (DDZR8BZJYU)" \
+            --entitlements Sources/HostApp/HostApp.entitlements \
+            "$APP_PATH"
+
+      - name: Notarize app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "threemf.app" -path "*/Release/*" | head -1)
+
+          ditto -c -k --keepParent "$APP_PATH" /tmp/threemf.zip
+
+          xcrun notarytool submit /tmp/threemf.zip \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait
+
+          xcrun stapler staple "$APP_PATH"
+
+      - name: Create release ZIP
+        run: |
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "threemf.app" -path "*/Release/*" | head -1)
+          ditto -c -k --keepParent "$APP_PATH" threemf.zip
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG_NAME" threemf.zip \
+            --title "threemf $TAG_NAME" \
+            --generate-notes
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: threemf.zip
+
+      - name: Update Homebrew tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          SHA256=$(shasum -a 256 threemf.zip | awk '{print $1}')
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/guanchzhou/homebrew-tap.git" /tmp/homebrew-tap
+          cd /tmp/homebrew-tap
+
+          cat > Casks/threemf.rb << CASK
+          cask "threemf" do
+            version "${VERSION}"
+            sha256 "${SHA256}"
+
+            url "https://github.com/guanchzhou/threemf/releases/download/v#{version}/threemf.zip"
+            name "threemf"
+            desc "Quick Look plugin for previewing .3mf and .stl 3D printing files"
+            homepage "https://github.com/guanchzhou/threemf"
+
+            depends_on macos: ">= :sonoma"
+
+            app "threemf.app"
+
+            zap trash: [
+              "~/Library/Containers/com.andreymaltsev.3mf-quicklook.preview",
+              "~/Library/Containers/com.andreymaltsev.3mf-quicklook.thumbnail",
+            ]
+          end
+          CASK
+
+          git config user.email "maltsev.andrey@gmail.com"
+          git config user.name "Andrei Maltsev"
+          git add -A
+          git commit -m "Update threemf to v${VERSION}"
+          git push
+
+      - name: Cleanup keychain
+        if: always()
+        run: security delete-keychain $RUNNER_TEMP/signing.keychain-db 2>/dev/null || true

@@ -1,0 +1,25 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build
+        run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFQuickLook -configuration Release build
+
+      - name: Test
+        run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFTests -configuration Debug test
