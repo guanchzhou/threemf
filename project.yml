@@ -1,0 +1,76 @@
+name: ThreeMFQuickLook
+options:
+  bundleIdPrefix: com.andreymaltsev
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    CODE_SIGN_IDENTITY: "Apple Development"
+    DEVELOPMENT_TEAM: DDZR8BZJYU
+    CODE_SIGN_STYLE: Automatic
+
+packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation.git
+    from: "0.9.19"
+
+targets:
+  ThreeMFQuickLook:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/HostApp
+      - Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.andreymaltsev.3mf-quicklook
+        INFOPLIST_FILE: Sources/HostApp/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/HostApp/HostApp.entitlements
+        PRODUCT_NAME: threemf
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - target: ThreeMFPreviewExtension
+      - target: ThreeMFThumbnailExtension
+
+  ThreeMFPreviewExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - Sources/PreviewExtension
+      - Sources/Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.andreymaltsev.3mf-quicklook.preview
+        INFOPLIST_FILE: Sources/PreviewExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/PreviewExtension/PreviewExtension.entitlements
+        PRODUCT_NAME: ThreeMFPreviewExtension
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
+        ENABLE_APP_SANDBOX: YES
+    dependencies:
+      - package: ZIPFoundation
+      - framework: QuickLookUI.framework
+        embed: false
+      - sdk: Quartz.framework
+
+  ThreeMFThumbnailExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - Sources/ThumbnailExtension
+      - Sources/Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.andreymaltsev.3mf-quicklook.thumbnail
+        INFOPLIST_FILE: Sources/ThumbnailExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/ThumbnailExtension/ThumbnailExtension.entitlements
+        PRODUCT_NAME: ThreeMFThumbnailExtension
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @executable_path/../../../../Frameworks"
+        ENABLE_APP_SANDBOX: YES
+    dependencies:
+      - package: ZIPFoundation
+      - sdk: QuickLookThumbnailing.framework
