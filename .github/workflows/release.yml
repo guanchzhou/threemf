@@ -22,10 +22,10 @@ jobs:
         run: xcodegen generate
 
       - name: Build
-        run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFQuickLook -configuration Release build
+        run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFQuickLook -configuration Release build CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
 
       - name: Run tests
-        run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFTests -configuration Debug test
+        run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFTests -configuration Debug test CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
 
       - name: Import signing certificate
         env:
