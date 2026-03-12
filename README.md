@@ -4,6 +4,17 @@
 
 <h1 align="center">threemf</h1>
 
+<p align="center">
+  <a href="https://github.com/guanchzhou/threemf/releases/latest"><img src="https://img.shields.io/github/v/release/guanchzhou/threemf?style=flat-square&color=blue" alt="Release"></a>
+  <a href="https://github.com/guanchzhou/threemf/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/guanchzhou/threemf/test.yml?style=flat-square&label=tests" alt="Tests"></a>
+  <a href="https://github.com/guanchzhou/threemf/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/guanchzhou/threemf/codeql.yml?style=flat-square&label=CodeQL" alt="CodeQL"></a>
+  <a href="https://github.com/guanchzhou/threemf/blob/main/LICENSE"><img src="https://img.shields.io/github/license/guanchzhou/threemf?style=flat-square" alt="License"></a>
+  <img src="https://img.shields.io/badge/platform-macOS%2026+-black?style=flat-square&logo=apple" alt="Platform">
+  <img src="https://img.shields.io/badge/arch-Apple%20Silicon-black?style=flat-square&logo=apple" alt="Apple Silicon">
+  <a href="https://github.com/guanchzhou/threemf/releases/latest"><img src="https://img.shields.io/github/downloads/guanchzhou/threemf/total?style=flat-square&color=green" alt="Downloads"></a>
+  <img src="https://img.shields.io/badge/SLSA-Level%203-brightgreen?style=flat-square" alt="SLSA L3">
+</p>
+
 <p align="center">Quick Look plugin for previewing <code>.3mf</code> and <code>.stl</code> 3D printing files on macOS.<br>Press Space in Finder to see interactive 3D previews — no need to open a slicer.</p>
 
 ## Features
