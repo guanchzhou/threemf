@@ -48,6 +48,7 @@ xcodebuild -project threemf.xcodeproj -scheme ThreeMFTests -configuration Debug 
 - **SceneKit for rendering**: uses Metal under the hood, no custom shaders — SCNGeometry + SCNView with `allowsCameraControl`
 - **Custom scroll handling**: `ZoomSCNView` subclass overrides scroll wheel for FOV zoom instead of dolly
 - **Right-click pan**: custom `rightMouseDragged` handler for camera panning
+- **Apple Silicon only**: arm64, macOS 26+
 - **No external deps except ZIPFoundation**: STL parsing, XML parsing, SceneKit rendering all use system frameworks
 - **Vertex deduplication**: STL parser uses quantized coordinate keys (multiply by 10000, round to Int32) for fast dedup
 

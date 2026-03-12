@@ -34,7 +34,7 @@ brew install --cask guanchzhou/tap/threemf
 
 ## Requirements
 
-macOS 14 (Sonoma) or later.
+macOS 26 (Tahoe) or later. Apple Silicon only.
 
 ## Build from source
 
