@@ -1,6 +1,10 @@
-# threemf
+<p align="center">
+  <img src="icon.png" width="128" height="128" alt="threemf icon">
+</p>
 
-Quick Look plugin for previewing `.3mf` 3D printing files on macOS. Press Space in Finder to see thumbnails from Bambu Lab, PrusaSlicer, and other slicers — no need to open the file.
+<h1 align="center">threemf</h1>
+
+<p align="center">Quick Look plugin for previewing <code>.3mf</code> 3D printing files on macOS.<br>Press Space in Finder to see thumbnails from Bambu Lab, PrusaSlicer, and other slicers — no need to open the file.</p>
 
 Works by extracting the embedded thumbnail PNG from `.3mf` ZIP archives.
 
