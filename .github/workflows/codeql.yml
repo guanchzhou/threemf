@@ -22,7 +22,7 @@ jobs:
           languages: swift
 
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: arch -arm64 brew install xcodegen
 
       - name: Generate and build
         run: |
