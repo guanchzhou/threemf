@@ -10,9 +10,9 @@ struct ThreeMFQuickLookApp: App {
                     .foregroundColor(.accentColor)
                 Text("threemf")
                     .font(.title)
-                Text("Quick Look previews for .3mf files in Finder.")
+                Text("Quick Look previews for .3mf and .stl files in Finder.")
                     .foregroundColor(.secondary)
-                Text("Press Space on any .3mf file to preview it.")
+                Text("Press Space on any .3mf or .stl file to preview it.")
                     .foregroundColor(.secondary)
             }
             .padding(40)

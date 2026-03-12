@@ -1,4 +1,4 @@
-name: ThreeMFQuickLook
+name: threemf
 options:
   bundleIdPrefix: com.andreymaltsev
   deploymentTarget:
@@ -56,6 +56,7 @@ targets:
       - framework: QuickLookUI.framework
         embed: false
       - sdk: Quartz.framework
+      - sdk: SceneKit.framework
 
   ThreeMFThumbnailExtension:
     type: app-extension
@@ -74,3 +75,18 @@ targets:
     dependencies:
       - package: ZIPFoundation
       - sdk: QuickLookThumbnailing.framework
+      - sdk: SceneKit.framework
+
+  ThreeMFTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests
+      - Sources/Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.andreymaltsev.3mf-quicklook.tests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - package: ZIPFoundation
+      - sdk: SceneKit.framework

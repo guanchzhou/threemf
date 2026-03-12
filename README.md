@@ -4,9 +4,19 @@
 
 <h1 align="center">threemf</h1>
 
-<p align="center">Quick Look plugin for previewing <code>.3mf</code> 3D printing files on macOS.<br>Press Space in Finder to see thumbnails from Bambu Lab, PrusaSlicer, and other slicers — no need to open the file.</p>
+<p align="center">Quick Look plugin for previewing <code>.3mf</code> and <code>.stl</code> 3D printing files on macOS.<br>Press Space in Finder to see interactive 3D previews — no need to open a slicer.</p>
 
-Works by extracting the embedded thumbnail PNG from `.3mf` ZIP archives.
+## Features
+
+- Interactive 3D preview with mouse rotation, pan, and zoom
+- Supports `.3mf` (Bambu Lab, PrusaSlicer, etc.) and `.stl` (binary and ASCII)
+- Falls back to embedded thumbnail for `.3mf` files when 3D parsing fails
+- Signed and notarized for easy distribution
+
+<p align="center">
+  <img src="images/demo-3mf.gif" width="300" alt="3MF preview">
+  <img src="images/demo-stl.gif" width="300" alt="STL preview">
+</p>
 
 ## Install
 
@@ -21,10 +31,6 @@ brew install --cask guanchzhou/tap/threemf
 1. Download `threemf.zip` from [Releases](https://github.com/guanchzhou/threemf/releases)
 2. Unzip and move `threemf.app` to `/Applications/`
 3. Open the app once to register the Quick Look extensions
-
-## Screenshots
-
-<!-- TODO: add screenshots -->
 
 ## Requirements
 

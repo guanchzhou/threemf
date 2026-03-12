@@ -13,7 +13,7 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>1.0.1</string>
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
 	<key>LSMinimumSystemVersion</key>
@@ -29,6 +29,7 @@
 			<key>QLSupportedContentTypes</key>
 			<array>
 				<string>com.andreymaltsev.threemf</string>
+				<string>public.standard-tesselated-geometry-format</string>
 			</array>
 			<key>QLSupportsSearchableItems</key>
 			<false/>
