@@ -4,14 +4,12 @@ on:
   push:
     tags: ["v*"]
 
-permissions:
-  contents: write
-  id-token: write
-  attestations: write
-
 jobs:
-  release:
+  # Job 1: Build and test (no secrets, no signing)
+  build:
     runs-on: macos-15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -26,6 +24,44 @@ jobs:
 
       - name: Run tests
         run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFTests -configuration Debug test CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO
+
+      - name: Package unsigned app
+        run: |
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "threemf.app" -path "*/Release/*" | head -1)
+          ditto -c -k --keepParent "$APP_PATH" threemf-unsigned.zip
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload unsigned artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: threemf-unsigned
+          path: threemf-unsigned.zip
+          retention-days: 1
+
+  # Job 2: Sign, notarize, release (isolated, has secrets)
+  sign-and-release:
+    needs: build
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            Sources/HostApp/HostApp.entitlements
+            Sources/PreviewExtension/PreviewExtension.entitlements
+            Sources/ThumbnailExtension/ThumbnailExtension.entitlements
+
+      - name: Download unsigned artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: threemf-unsigned
+
+      - name: Unpack unsigned app
+        run: ditto -x -k threemf-unsigned.zip .
 
       - name: Import signing certificate
         env:
@@ -46,23 +82,20 @@ jobs:
 
       - name: Sign app
         run: |
-          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "threemf.app" -path "*/Release/*" | head -1)
-          echo "Signing $APP_PATH"
-
           codesign --force --options runtime \
             --sign "Developer ID Application: Andrei Maltsev (DDZR8BZJYU)" \
             --entitlements Sources/ThumbnailExtension/ThumbnailExtension.entitlements \
-            "$APP_PATH/Contents/PlugIns/ThreeMFThumbnailExtension.appex"
+            threemf.app/Contents/PlugIns/ThreeMFThumbnailExtension.appex
 
           codesign --force --options runtime \
             --sign "Developer ID Application: Andrei Maltsev (DDZR8BZJYU)" \
             --entitlements Sources/PreviewExtension/PreviewExtension.entitlements \
-            "$APP_PATH/Contents/PlugIns/ThreeMFPreviewExtension.appex"
+            threemf.app/Contents/PlugIns/ThreeMFPreviewExtension.appex
 
           codesign --force --options runtime \
             --sign "Developer ID Application: Andrei Maltsev (DDZR8BZJYU)" \
             --entitlements Sources/HostApp/HostApp.entitlements \
-            "$APP_PATH"
+            threemf.app
 
       - name: Notarize app
         env:
@@ -70,9 +103,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
-          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "threemf.app" -path "*/Release/*" | head -1)
-
-          ditto -c -k --keepParent "$APP_PATH" /tmp/threemf.zip
+          ditto -c -k --keepParent threemf.app /tmp/threemf.zip
 
           xcrun notarytool submit /tmp/threemf.zip \
             --apple-id "$APPLE_ID" \
@@ -80,16 +111,17 @@ jobs:
             --password "$APPLE_APP_PASSWORD" \
             --wait
 
-          xcrun stapler staple "$APP_PATH"
+          xcrun stapler staple threemf.app
 
       - name: Create release ZIP
-        run: |
-          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "threemf.app" -path "*/Release/*" | head -1)
-          ditto -c -k --keepParent "$APP_PATH" threemf.zip
+        run: ditto -c -k --keepParent threemf.app threemf.zip
 
-      - name: Get version from tag
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Upload signed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: threemf-signed
+          path: threemf.zip
+          retention-days: 5
 
       - name: Create GitHub Release
         env:
@@ -100,15 +132,10 @@ jobs:
             --title "threemf $TAG_NAME" \
             --generate-notes
 
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: threemf.zip
-
       - name: Update Homebrew tap
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
           SHA256=$(shasum -a 256 threemf.zip | awk '{print $1}')
           git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/guanchzhou/homebrew-tap.git" /tmp/homebrew-tap
@@ -124,7 +151,8 @@ jobs:
             desc "Quick Look plugin for previewing .3mf and .stl 3D printing files"
             homepage "https://github.com/guanchzhou/threemf"
 
-            depends_on macos: ">= :sonoma"
+            depends_on macos: ">= :tahoe"
+            depends_on arch: :arm64
 
             app "threemf.app"
 
@@ -144,3 +172,22 @@ jobs:
       - name: Cleanup keychain
         if: always()
         run: security delete-keychain $RUNNER_TEMP/signing.keychain-db 2>/dev/null || true
+
+  # Job 3: SLSA provenance (isolated, non-forgeable)
+  provenance:
+    needs: sign-and-release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
+    steps:
+      - name: Download signed artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: threemf-signed
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: threemf.zip
