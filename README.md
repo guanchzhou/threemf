@@ -14,8 +14,8 @@
 - Signed and notarized for easy distribution
 
 <p align="center">
-  <img src="images/demo-3mf.gif" width="300" alt="3MF preview">
-  <img src="images/demo-stl.gif" width="300" alt="STL preview">
+  <img src="images/demo-orbit.gif" width="300" alt="Orbit">
+  <img src="images/demo-pan.gif" width="300" alt="Pan & Zoom">
 </p>
 
 ## Install
