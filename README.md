@@ -46,6 +46,26 @@ xcodegen generate
 xcodebuild -scheme ThreeMFQuickLook -configuration Release build
 ```
 
+### Building for older macOS versions
+
+Official releases target macOS 26+, but the code is compatible with macOS 14 (Sonoma) and later. To build for an older version, override the deployment target:
+
+```
+xcodegen generate
+xcodebuild -scheme ThreeMFQuickLook -configuration Release \
+  MACOSX_DEPLOYMENT_TARGET=14.0 build
+```
+
+To include Intel support (universal binary):
+
+```
+xcodebuild -scheme ThreeMFQuickLook -configuration Release \
+  MACOSX_DEPLOYMENT_TARGET=14.0 ARCHS="arm64 x86_64" \
+  ONLY_ACTIVE_ARCH=NO build
+```
+
+> **Note:** Older versions are not tested in CI. If you encounter issues, please open an issue.
+
 ## License
 
 MIT
