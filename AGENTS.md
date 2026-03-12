@@ -45,7 +45,7 @@ xcodebuild -project threemf.xcodeproj -scheme ThreeMFTests -configuration Debug 
 - **Brand**: always "threemf" (lowercase, one word)
 - **3D first, thumbnail fallback**: for .3mf files, try parsing the 3D mesh; if that fails, extract the embedded PNG thumbnail
 - **Z-up to Y-up**: 3D printing models use Z as vertical axis, SceneKit uses Y — apply -90° X rotation
-- **SceneKit for rendering**: no Metal shaders, just SCNGeometry + SCNView with `allowsCameraControl`
+- **SceneKit for rendering**: uses Metal under the hood, no custom shaders — SCNGeometry + SCNView with `allowsCameraControl`
 - **Custom scroll handling**: `ZoomSCNView` subclass overrides scroll wheel for FOV zoom instead of dolly
 - **Right-click pan**: custom `rightMouseDragged` handler for camera panning
 - **No external deps except ZIPFoundation**: STL parsing, XML parsing, SceneKit rendering all use system frameworks
