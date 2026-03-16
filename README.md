@@ -19,9 +19,11 @@
 
 ## Features
 
+- **Instant preview** — shows the embedded thumbnail immediately for `.3mf` files, with a "Show 3D" button to load the full interactive view on demand
 - Interactive 3D preview with mouse rotation, pan, and zoom
+- Progress bar while loading large models (2M+ triangles)
 - Supports `.3mf` (Bambu Lab, PrusaSlicer, etc.) and `.stl` (binary and ASCII)
-- Falls back to embedded thumbnail for `.3mf` files when 3D parsing fails
+- Fast byte-level 3MF parser — 5–10x faster than XML-based parsing for large files
 - Signed and notarized for easy distribution
 
 <p align="center">

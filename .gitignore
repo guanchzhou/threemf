@@ -6,3 +6,4 @@ build/
 *.xcuserstate
 Pods/
 .swiftpm/
+BuildInfo.generated.swift

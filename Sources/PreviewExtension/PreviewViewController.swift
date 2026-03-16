@@ -3,46 +3,118 @@ import QuickLookUI
 import SceneKit
 
 class PreviewViewController: NSViewController, QLPreviewingController {
+    private var fileURL: URL?
 
     override func loadView() {
         self.view = NSView()
     }
 
     func preparePreviewOfFile(at url: URL, completionHandler handler: @escaping (Error?) -> Void) {
+        fileURL = url
         let ext = url.pathExtension.lowercased()
 
         switch ext {
         case "3mf":
-            if let mesh = try? ThreeMFMeshParser.parseMesh(from: url) {
-                show3DScene(from: mesh)
-                handler(nil)
-            } else {
+            prepare3MFPreview(url: url, handler: handler)
+        case "stl":
+            DispatchQueue.global(qos: .userInitiated).async {
                 do {
-                    let imageData = try ThreeMFExtractor.extractThumbnail(from: url)
-                    guard let image = NSImage(data: imageData) else {
-                        handler(ThreeMFExtractorError.noThumbnailFound)
-                        return
+                    let mesh = try STLParser.parseMesh(from: url)
+                    DispatchQueue.main.async {
+                        self.show3DScene(from: mesh)
+                        handler(nil)
                     }
-                    showImage(image)
-                    handler(nil)
                 } catch {
-                    handler(error)
+                    DispatchQueue.main.async { handler(error) }
                 }
             }
-
-        case "stl":
-            do {
-                let mesh = try STLParser.parseMesh(from: url)
-                show3DScene(from: mesh)
-                handler(nil)
-            } catch {
-                handler(error)
-            }
-
         default:
             handler(ThreeMFExtractorError.noThumbnailFound)
         }
     }
+
+    private func prepare3MFPreview(url: URL, handler: @escaping (Error?) -> Void) {
+        // Extract thumbnail (fast — small PNG from ZIP)
+        let thumbnailImage: NSImage?
+        if let imageData = try? ThreeMFExtractor.extractThumbnail(from: url) {
+            thumbnailImage = NSImage(data: imageData)
+        } else {
+            thumbnailImage = nil
+        }
+
+        if let image = thumbnailImage {
+            // Show thumbnail + "Show 3D" button
+            let showUI = {
+                self.showImage(image)
+                self.showShow3DButton()
+                handler(nil)
+            }
+            if Thread.isMainThread { showUI() }
+            else { DispatchQueue.main.async(execute: showUI) }
+        } else {
+            // No thumbnail — load 3D directly
+            DispatchQueue.global(qos: .userInitiated).async {
+                if let mesh = try? ThreeMFMeshParser.parseMesh(from: url) {
+                    DispatchQueue.main.async {
+                        self.show3DScene(from: mesh)
+                        handler(nil)
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        handler(ThreeMFExtractorError.noThumbnailFound)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - "Show 3D" button
+
+    private func showShow3DButton() {
+        let button = Show3DButton()
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.target = self
+        button.action = #selector(show3DButtonTapped)
+        view.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
+            button.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
+        ])
+    }
+
+    @objc private func show3DButtonTapped(_ sender: NSView) {
+        guard let url = fileURL else { return }
+
+        // Replace button with progress overlay
+        sender.removeFromSuperview()
+        let overlay = LoadingOverlay()
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(overlay)
+        NSLayoutConstraint.activate([
+            overlay.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
+            overlay.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
+        ])
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let progressCallback: (Float) -> Void = { fraction in
+                DispatchQueue.main.async {
+                    overlay.progress = Double(fraction)
+                }
+            }
+            guard let mesh = try? ThreeMFMeshParser.parseMesh(from: url, progress: progressCallback) else {
+                DispatchQueue.main.async { overlay.removeFromSuperview() }
+                return
+            }
+            DispatchQueue.main.async {
+                for subview in self.view.subviews {
+                    subview.removeFromSuperview()
+                }
+                self.show3DScene(from: mesh)
+            }
+        }
+    }
+
+    // MARK: - View builders
 
     private func show3DScene(from mesh: MeshData) {
         let scene = SceneBuilder.buildScene(from: mesh)
@@ -76,6 +148,8 @@ class PreviewViewController: NSViewController, QLPreviewingController {
         ])
     }
 }
+
+// MARK: - ZoomSCNView
 
 /// SCNView subclass: scroll = zoom, right-drag = pan, left-drag = orbit
 class ZoomSCNView: SCNView {
@@ -112,5 +186,80 @@ class ZoomSCNView: SCNView {
 
     override func rightMouseUp(with event: NSEvent) {
         isPanning = false
+    }
+}
+
+// MARK: - Show3DButton
+
+class Show3DButton: NSButton {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        title = "Show 3D"
+        bezelStyle = .push
+        setButtonType(.momentaryPushIn)
+        font = .systemFont(ofSize: NSFont.systemFontSize)
+    }
+}
+
+// MARK: - LoadingOverlay
+
+class LoadingOverlay: NSView {
+    private let progressBar = NSProgressIndicator()
+    private let label = NSTextField(labelWithString: "Loading 3D… 0%")
+
+    var progress: Double = 0 {
+        didSet {
+            progressBar.doubleValue = progress * 100
+            let pct = Int(progress * 100)
+            label.stringValue = "Loading 3D… \(pct)%"
+        }
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        progressBar.style = .bar
+        progressBar.isIndeterminate = false
+        progressBar.minValue = 0
+        progressBar.maxValue = 100
+        progressBar.doubleValue = 0
+        progressBar.controlSize = .regular
+        progressBar.translatesAutoresizingMaskIntoConstraints = false
+
+        label.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        label.textColor = .secondaryLabelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(progressBar)
+        addSubview(label)
+
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            progressBar.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 8),
+            progressBar.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            progressBar.centerYAnchor.constraint(equalTo: centerYAnchor),
+            progressBar.widthAnchor.constraint(equalToConstant: 80),
+
+            heightAnchor.constraint(equalToConstant: 28),
+        ])
     }
 }

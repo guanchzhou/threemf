@@ -8,7 +8,7 @@
     "component": {
       "type": "application",
       "name": "threemf",
-      "version": "1.0.1",
+      "version": "1.0.4",
       "description": "Quick Look plugin for previewing .3mf and .stl 3D printing files on macOS",
       "licenses": [
         {

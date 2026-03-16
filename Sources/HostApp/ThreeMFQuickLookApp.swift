@@ -14,6 +14,9 @@ struct ThreeMFQuickLookApp: App {
                     .foregroundColor(.secondary)
                 Text("Press Space on any .3mf or .stl file to preview it.")
                     .foregroundColor(.secondary)
+                Text("Build \(BuildInfo.gitHash)")
+                    .font(.caption)
+                    .foregroundColor(.secondary.opacity(0.5))
             }
             .padding(40)
             .frame(minWidth: 400, minHeight: 250)

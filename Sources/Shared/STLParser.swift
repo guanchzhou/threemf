@@ -34,14 +34,6 @@ struct STLParser {
         }
     }
 
-    private static func readFloat(_ data: Data, _ offset: Int) -> Float {
-        var value: Float = 0
-        _ = withUnsafeMutableBytes(of: &value) { dest in
-            data.copyBytes(to: dest, from: offset..<offset + 4)
-        }
-        return value
-    }
-
     private static func parseBinary(data: Data, triangleCount: Int) throws -> MeshData {
         guard triangleCount > 0 else { throw STLParserError.noTriangles }
 
@@ -51,23 +43,27 @@ struct STLParser {
 
         vertices.reserveCapacity(triangleCount)
         indices.reserveCapacity(triangleCount * 3)
+        vertexMap.reserveCapacity(triangleCount)
 
-        for i in 0..<triangleCount {
-            let offset = 84 + i * 50
-            for v in 0..<3 {
-                let vOffset = offset + 12 + v * 12
-                let x = readFloat(data, vOffset)
-                let y = readFloat(data, vOffset + 4)
-                let z = readFloat(data, vOffset + 8)
+        data.withUnsafeBytes { raw in
+            let bytes = raw.baseAddress!
+            for i in 0..<triangleCount {
+                let triBase = bytes + 84 + i * 50 + 12 // skip header + normal
+                for v in 0..<3 {
+                    let vPtr = (triBase + v * 12).assumingMemoryBound(to: Float.self)
+                    let x = vPtr[0]
+                    let y = vPtr[1]
+                    let z = vPtr[2]
 
-                let key = VertexKey(x: x, y: y, z: z)
-                if let existing = vertexMap[key] {
-                    indices.append(existing)
-                } else {
-                    let idx = UInt32(vertices.count)
-                    vertexMap[key] = idx
-                    vertices.append(SCNVector3(x, y, z))
-                    indices.append(idx)
+                    let key = VertexKey(x: x, y: y, z: z)
+                    if let existing = vertexMap[key] {
+                        indices.append(existing)
+                    } else {
+                        let idx = UInt32(vertices.count)
+                        vertexMap[key] = idx
+                        vertices.append(SCNVector3(x, y, z))
+                        indices.append(idx)
+                    }
                 }
             }
         }
