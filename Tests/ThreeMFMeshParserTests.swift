@@ -117,11 +117,11 @@ class ThreeMFMeshParserTests: XCTestCase {
         XCTAssertThrowsError(try ThreeMFMeshParser.parseMesh(from: url))
     }
 
-    func testParse3MF_invalidFile_throws() {
+    func testParse3MF_invalidFile_throws() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("3mf")
-        try! "not a zip".data(using: .utf8)!.write(to: url)
+        try "not a zip".data(using: .utf8)!.write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
 
         XCTAssertThrowsError(try ThreeMFMeshParser.parseMesh(from: url))
@@ -177,31 +177,68 @@ class ThreeMFMeshParserTests: XCTestCase {
         XCTAssertEqual(cameras.count, 1)
     }
 
-    // MARK: - Integration with real files
+    // MARK: - Safety
 
-    func testParseReal3MFFile() throws {
-        let path = "/Users/andreymaltsev/Downloads/fruitflytrap-6CUTNL.3mf"
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Test file not available")
+    func testExtractThumbnail_oversizedEntry_throws() throws {
+        // Create a 3MF with a thumbnail whose declared uncompressedSize exceeds the limit
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("3mf")
+        guard let archive = Archive(url: url, accessMode: .create) else {
+            XCTFail("Cannot create archive")
+            return
         }
-        let url = URL(fileURLWithPath: path)
-        let mesh = try ThreeMFMeshParser.parseMesh(from: url)
+        defer { try? FileManager.default.removeItem(at: url) }
 
-        XCTAssertGreaterThan(mesh.vertices.count, 100)
-        XCTAssertGreaterThan(mesh.indices.count, 100)
-        XCTAssertNotNil(mesh.normals)
+        let smallData = Data([0x89, 0x50, 0x4E, 0x47])
+        // Declare size as 11 MB (exceeds 10 MB limit)
+        let declaredSize: UInt32 = 11 * 1024 * 1024
+        try archive.addEntry(
+            with: "Metadata/plate_1.png",
+            type: .file,
+            uncompressedSize: declaredSize,
+            provider: { position, size in
+                let end = min(position + size, smallData.count)
+                guard position < smallData.count else { return Data() }
+                return smallData.subdata(in: position..<end)
+            }
+        )
+
+        XCTAssertThrowsError(try ThreeMFExtractor.extractThumbnail(from: url)) { error in
+            XCTAssertTrue(error is ThreeMFExtractorError)
+        }
     }
 
-    func testParseRealSTLFile() throws {
-        let path = "/Users/andreymaltsev/Downloads/H2D exhaust.stl"
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Test file not available")
-        }
-        let url = URL(fileURLWithPath: path)
-        let mesh = try STLParser.parseMesh(from: url)
+    func testParse3MF_outOfRangeIndices_doesNotCrash() throws {
+        // Triangle references vertex index 99 which doesn't exist (only 3 vertices)
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+          <resources>
+            <object id="1" type="model">
+              <mesh>
+                <vertices>
+                  <vertex x="0" y="0" z="0" />
+                  <vertex x="1" y="0" z="0" />
+                  <vertex x="0" y="1" z="0" />
+                </vertices>
+                <triangles>
+                  <triangle v1="0" v2="1" v3="99" />
+                </triangles>
+              </mesh>
+            </object>
+          </resources>
+          <build>
+            <item objectid="1" />
+          </build>
+        </model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
 
-        XCTAssertGreaterThan(mesh.vertices.count, 100)
-        XCTAssertGreaterThan(mesh.indices.count, 100)
+        // Should not crash — normals computation skips out-of-range indices
+        let mesh = try ThreeMFMeshParser.parseMesh(from: url)
+        XCTAssertNotNil(mesh.normals)
     }
 
     // MARK: - Helpers

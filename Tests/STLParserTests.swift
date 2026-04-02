@@ -15,7 +15,7 @@ class STLParserTests: XCTestCase {
                 v3: (0, 1, 0)
             ),
         ])
-        let url = writeTempFile(data: data, ext: "stl")
+        let url = try writeTempFile(data: data, ext: "stl")
         defer { try? FileManager.default.removeItem(at: url) }
 
         let mesh = try STLParser.parseMesh(from: url)
@@ -32,7 +32,7 @@ class STLParserTests: XCTestCase {
             Triangle(normal: (0, 0, 1), v1: (0, 0, 0), v2: (1, 0, 0), v3: (0, 1, 0)),
             Triangle(normal: (0, 0, 1), v1: (1, 0, 0), v2: (1, 1, 0), v3: (0, 1, 0)),
         ])
-        let url = writeTempFile(data: data, ext: "stl")
+        let url = try writeTempFile(data: data, ext: "stl")
         defer { try? FileManager.default.removeItem(at: url) }
 
         let mesh = try STLParser.parseMesh(from: url)
@@ -42,13 +42,13 @@ class STLParserTests: XCTestCase {
         XCTAssertEqual(mesh.indices.count, 6)
     }
 
-    func testParseBinarySTL_emptyFile_throws() {
+    func testParseBinarySTL_emptyFile_throws() throws {
         let data = Data(count: 84) // header + 0 triangles
         var mutable = data
         mutable.withUnsafeMutableBytes { ptr in
             ptr.storeBytes(of: UInt32(0), toByteOffset: 80, as: UInt32.self)
         }
-        let url = writeTempFile(data: mutable, ext: "stl")
+        let url = try writeTempFile(data: mutable, ext: "stl")
         defer { try? FileManager.default.removeItem(at: url) }
 
         XCTAssertThrowsError(try STLParser.parseMesh(from: url))
@@ -68,7 +68,7 @@ class STLParserTests: XCTestCase {
           endfacet
         endsolid test
         """
-        let url = writeTempFile(string: ascii, ext: "stl")
+        let url = try writeTempFile(string: ascii, ext: "stl")
         defer { try? FileManager.default.removeItem(at: url) }
 
         let mesh = try STLParser.parseMesh(from: url)
@@ -77,11 +77,38 @@ class STLParserTests: XCTestCase {
         XCTAssertEqual(mesh.indices.count, 3)
     }
 
-    func testParseASCIISTL_noVertices_throws() {
+    func testParseASCIISTL_noVertices_throws() throws {
         let ascii = "solid empty\nendsolid empty\n"
-        let url = writeTempFile(string: ascii, ext: "stl")
+        let url = try writeTempFile(string: ascii, ext: "stl")
         defer { try? FileManager.default.removeItem(at: url) }
 
+        XCTAssertThrowsError(try STLParser.parseMesh(from: url))
+    }
+
+    func testParseBinarySTL_mismatchedTriangleCount_fallsBackToASCII() throws {
+        // Header claims 100 triangles but file is only 84 + 50 bytes (1 triangle)
+        var data = Data(count: 80) // header
+        var claimedCount: UInt32 = 100
+        data.append(Data(bytes: &claimedCount, count: 4))
+        // Add 1 real triangle (50 bytes) — size won't match 84 + 100*50
+        var values: [Float] = [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0]
+        data.append(Data(bytes: &values, count: 48))
+        var attr: UInt16 = 0
+        data.append(Data(bytes: &attr, count: 2))
+
+        let url = try writeTempFile(data: data, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Size mismatch triggers ASCII fallback, which finds no vertices
+        XCTAssertThrowsError(try STLParser.parseMesh(from: url))
+    }
+
+    func testParseSTL_fileSmallerThanHeader() throws {
+        let data = Data(count: 40) // less than 84-byte header
+        let url = try writeTempFile(data: data, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Should fall through to ASCII parsing, then throw noTriangles
         XCTAssertThrowsError(try STLParser.parseMesh(from: url))
     }
 
@@ -134,15 +161,15 @@ class STLParserTests: XCTestCase {
         return data
     }
 
-    func writeTempFile(data: Data, ext: String) -> URL {
+    func writeTempFile(data: Data, ext: String) throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension(ext)
-        try! data.write(to: url)
+        try data.write(to: url)
         return url
     }
 
-    func writeTempFile(string: String, ext: String) -> URL {
-        writeTempFile(data: string.data(using: .utf8)!, ext: ext)
+    func writeTempFile(string: String, ext: String) throws -> URL {
+        try writeTempFile(data: string.data(using: .utf8)!, ext: ext)
     }
 }

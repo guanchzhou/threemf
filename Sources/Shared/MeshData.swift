@@ -18,6 +18,8 @@ struct MeshData {
             let i1 = Int(indices[i + 1])
             let i2 = Int(indices[i + 2])
 
+            guard i0 < count, i1 < count, i2 < count else { continue }
+
             let v0 = simd_float3(Float(vertices[i0].x), Float(vertices[i0].y), Float(vertices[i0].z))
             let v1 = simd_float3(Float(vertices[i1].x), Float(vertices[i1].y), Float(vertices[i1].z))
             let v2 = simd_float3(Float(vertices[i2].x), Float(vertices[i2].y), Float(vertices[i2].z))

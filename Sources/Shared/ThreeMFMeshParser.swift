@@ -19,6 +19,9 @@ enum ThreeMFMeshParserError: Error, LocalizedError {
 }
 
 struct ThreeMFMeshParser {
+    /// Maximum allowed size for extracted model data (500 MB) to prevent ZIP bomb attacks
+    private static let maxModelSize: UInt64 = 500 * 1024 * 1024
+
     private static let modelPaths = [
         "3D/3dmodel.model",
         "3D/3DModel.model",
@@ -35,6 +38,9 @@ struct ThreeMFMeshParser {
         var modelData: Data?
         for path in modelPaths {
             if let entry = archive[path] {
+                guard entry.uncompressedSize <= maxModelSize else {
+                    throw ThreeMFMeshParserError.parseFailed
+                }
                 var data = Data()
                 _ = try archive.extract(entry) { chunk in data.append(chunk) }
                 if !data.isEmpty {
@@ -81,6 +87,7 @@ struct ThreeMFMeshParser {
             if objectMeshes[comp.objectId] != nil { continue }
 
             if let entry = archive[normalized] {
+                guard entry.uncompressedSize <= maxModelSize else { continue }
                 let totalSize = max(entry.uncompressedSize, 1)
                 var data = Data()
                 data.reserveCapacity(Int(totalSize))

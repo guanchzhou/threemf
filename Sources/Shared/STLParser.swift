@@ -45,15 +45,15 @@ struct STLParser {
         indices.reserveCapacity(triangleCount * 3)
         vertexMap.reserveCapacity(triangleCount)
 
-        data.withUnsafeBytes { raw in
-            let bytes = raw.baseAddress!
+        try data.withUnsafeBytes { raw in
+            guard raw.baseAddress != nil else { throw STLParserError.cannotReadFile }
             for i in 0..<triangleCount {
-                let triBase = bytes + 84 + i * 50 + 12 // skip header + normal
+                let triOffset = 84 + i * 50 + 12 // skip header + normal
                 for v in 0..<3 {
-                    let vPtr = (triBase + v * 12).assumingMemoryBound(to: Float.self)
-                    let x = vPtr[0]
-                    let y = vPtr[1]
-                    let z = vPtr[2]
+                    let vOffset = triOffset + v * 12
+                    let x = raw.loadUnaligned(fromByteOffset: vOffset, as: Float.self)
+                    let y = raw.loadUnaligned(fromByteOffset: vOffset + 4, as: Float.self)
+                    let z = raw.loadUnaligned(fromByteOffset: vOffset + 8, as: Float.self)
 
                     let key = VertexKey(x: x, y: y, z: z)
                     if let existing = vertexMap[key] {
