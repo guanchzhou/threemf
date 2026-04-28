@@ -35,7 +35,7 @@ jobs:
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Upload unsigned artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: threemf-unsigned
           path: threemf-unsigned.zip
@@ -119,7 +119,7 @@ jobs:
         run: ditto -c -k --keepParent threemf.app threemf.zip
 
       - name: Upload signed artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: threemf-signed
           path: threemf.zip
