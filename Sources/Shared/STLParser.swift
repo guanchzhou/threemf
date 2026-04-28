@@ -16,6 +16,9 @@ enum STLParserError: Error, LocalizedError {
 }
 
 struct STLParser {
+    /// Hard cap on triangles to prevent OOM via crafted headers (UInt32 max is ~4.2B).
+    static let maxTriangles = 50_000_000
+
     static func parseMesh(from fileURL: URL) throws -> MeshData {
         let data = try Data(contentsOf: fileURL)
         guard data.count > 84 else {
@@ -27,7 +30,8 @@ struct STLParser {
             data.copyBytes(to: dest, from: 80..<84)
         }
         let expectedSize = 84 + Int(triangleCount) * 50
-        if data.count == expectedSize {
+        // Accept files >= expectedSize to tolerate trailing bytes some slicers append.
+        if triangleCount > 0 && data.count >= expectedSize {
             return try parseBinary(data: data, triangleCount: Int(triangleCount))
         } else {
             return try parseASCII(data: data)
@@ -36,18 +40,21 @@ struct STLParser {
 
     private static func parseBinary(data: Data, triangleCount: Int) throws -> MeshData {
         guard triangleCount > 0 else { throw STLParserError.noTriangles }
+        // Clamp to avoid huge reserveCapacity on a malicious header.
+        let clampedCount = min(triangleCount, maxTriangles)
 
-        var vertices: [SCNVector3] = []
+        var vertices: [simd_float3] = []
         var indices: [UInt32] = []
         var vertexMap: [VertexKey: UInt32] = [:]
 
-        vertices.reserveCapacity(triangleCount)
-        indices.reserveCapacity(triangleCount * 3)
-        vertexMap.reserveCapacity(triangleCount)
+        // Real-world dedup ratio is ~3:1 on closed manifolds; reserve conservatively.
+        vertices.reserveCapacity(clampedCount)
+        indices.reserveCapacity(clampedCount * 3)
+        vertexMap.reserveCapacity(clampedCount / 2 + 1)
 
         try data.withUnsafeBytes { raw in
             guard raw.baseAddress != nil else { throw STLParserError.cannotReadFile }
-            for i in 0..<triangleCount {
+            for i in 0..<clampedCount {
                 let triOffset = 84 + i * 50 + 12 // skip header + normal
                 for v in 0..<3 {
                     let vOffset = triOffset + v * 12
@@ -61,7 +68,7 @@ struct STLParser {
                     } else {
                         let idx = UInt32(vertices.count)
                         vertexMap[key] = idx
-                        vertices.append(SCNVector3(x, y, z))
+                        vertices.append(simd_float3(x, y, z))
                         indices.append(idx)
                     }
                 }
@@ -78,7 +85,7 @@ struct STLParser {
             throw STLParserError.cannotReadFile
         }
 
-        var vertices: [SCNVector3] = []
+        var vertices: [simd_float3] = []
         var indices: [UInt32] = []
         var vertexMap: [VertexKey: UInt32] = [:]
 
@@ -99,7 +106,7 @@ struct STLParser {
             } else {
                 let idx = UInt32(vertices.count)
                 vertexMap[key] = idx
-                vertices.append(SCNVector3(x, y, z))
+                vertices.append(simd_float3(x, y, z))
                 indices.append(idx)
             }
         }

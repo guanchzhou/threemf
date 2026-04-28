@@ -45,6 +45,31 @@ brew install --cask guanchzhou/tap/threemf
 2. Unzip and move `threemf.app` to `/Applications/`
 3. Open the app once to register the Quick Look extensions
 
+## CLI
+
+threemf ships an optional headless CLI for thumbnail generation and file inspection — useful for CI pipelines, automation, or print-farm dashboards.
+
+### Build from source
+
+```
+xcodegen generate
+xcodebuild -scheme threemf-cli -configuration Release build
+```
+
+### SwiftPM
+
+```
+swift build -c release
+.build/release/threemf-cli info path/to/file.3mf
+```
+
+### Usage
+
+```
+threemf-cli info <file>                            # prints JSON: format, counts, bounding box, materials
+threemf-cli thumbnail <input> <output.png> [--size N]  # renders 3D thumbnail (default 512×512)
+```
+
 ## Requirements
 
 macOS 26 (Tahoe) or later. Apple Silicon only.

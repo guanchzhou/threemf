@@ -20,10 +20,10 @@ jobs:
         run: xcodegen generate
 
       - name: Build
-        run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFQuickLook -configuration Release build CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO MACOSX_DEPLOYMENT_TARGET=14.0
+        run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFQuickLook -configuration Release build CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO MACOSX_DEPLOYMENT_TARGET=14.0 ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO
 
       - name: Run tests
-        run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFTests -configuration Debug test CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO MACOSX_DEPLOYMENT_TARGET=14.0
+        run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFTests -configuration Debug test CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO MACOSX_DEPLOYMENT_TARGET=14.0 ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO
 
       - name: Package unsigned app
         run: |
@@ -54,6 +54,7 @@ jobs:
             Sources/HostApp/HostApp.entitlements
             Sources/PreviewExtension/PreviewExtension.entitlements
             Sources/ThumbnailExtension/ThumbnailExtension.entitlements
+            CHANGELOG.md
 
       - name: Download unsigned artifact
         uses: actions/download-artifact@v4
@@ -73,11 +74,12 @@ jobs:
 
           echo "$CERTIFICATE_P12_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
 
-          security create-keychain -p "" "$KEYCHAIN_PATH"
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 32)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "" "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "" "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
 
       - name: Sign app
@@ -123,6 +125,24 @@ jobs:
           path: threemf.zip
           retention-days: 5
 
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG_NAME#v}"
+          # Extract section between "## [VERSION]" and the next "## [" header
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { capture=1; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md > release-notes.md
+
+          if [ ! -s release-notes.md ]; then
+            echo "ERROR: No CHANGELOG.md section for $VERSION. Add one before tagging."
+            exit 1
+          fi
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -130,7 +150,7 @@ jobs:
         run: |
           gh release create "$TAG_NAME" threemf.zip \
             --title "$TAG_NAME" \
-            --generate-notes
+            --notes-file release-notes.md
 
       - name: Update Homebrew tap
         env:
@@ -152,7 +172,6 @@ jobs:
             homepage "https://github.com/guanchzhou/threemf"
 
             depends_on macos: ">= :tahoe"
-            depends_on arch: :arm64
 
             app "threemf.app"
 

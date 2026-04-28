@@ -38,7 +38,10 @@ struct ThreeMFExtractor {
     ]
 
     static func extractThumbnail(from fileURL: URL) throws -> Data {
-        guard let archive = Archive(url: fileURL, accessMode: .read) else {
+        let archive: Archive
+        do {
+            archive = try Archive(url: fileURL, accessMode: .read)
+        } catch {
             throw ThreeMFExtractorError.cannotOpenArchive
         }
 

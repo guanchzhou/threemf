@@ -92,6 +92,23 @@ targets:
       - sdk: QuickLookThumbnailing.framework
       - sdk: SceneKit.framework
 
+  threemf-cli:
+    type: tool
+    platform: macOS
+    sources:
+      - Sources/CLI
+      - Sources/Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.andreymaltsev.threemf-cli
+        PRODUCT_NAME: threemf-cli
+        ENABLE_APP_SANDBOX: NO
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - package: ZIPFoundation
+      - sdk: SceneKit.framework
+      - sdk: AppKit.framework
+
   ThreeMFTests:
     type: bundle.unit-test
     platform: macOS

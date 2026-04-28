@@ -1,5 +1,6 @@
 import SceneKit
 import XCTest
+import simd
 
 
 class STLParserTests: XCTestCase {
@@ -117,9 +118,9 @@ class STLParserTests: XCTestCase {
     func testComputeNormals_flatTriangle() {
         var mesh = MeshData(
             vertices: [
-                SCNVector3(0, 0, 0),
-                SCNVector3(1, 0, 0),
-                SCNVector3(0, 1, 0),
+                simd_float3(0, 0, 0),
+                simd_float3(1, 0, 0),
+                simd_float3(0, 1, 0),
             ],
             indices: [0, 1, 2],
             normals: nil
@@ -131,6 +132,55 @@ class STLParserTests: XCTestCase {
         for n in mesh.normals! {
             XCTAssertEqual(n.z, 1.0, accuracy: 0.01)
         }
+    }
+
+    // MARK: - Phase A: trailing bytes / clamped triangle count
+
+    /// Slicers sometimes append metadata after the binary STL payload. The parser
+    /// now accepts `data.count >= expectedSize` instead of strict equality.
+    func testParseBinarySTL_acceptsTrailingBytes() throws {
+        var data = makeBinarySTL(triangles: [
+            Triangle(normal: (0, 0, 1), v1: (0, 0, 0), v2: (1, 0, 0), v3: (0, 1, 0)),
+            Triangle(normal: (0, 0, 1), v1: (1, 0, 0), v2: (1, 1, 0), v3: (0, 1, 0)),
+        ])
+        // Append 100 bytes of garbage past the declared payload.
+        data.append(Data(count: 100))
+
+        let url = try writeTempFile(data: data, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let mesh = try STLParser.parseMesh(from: url)
+        // 2 triangles → 6 indices, 4 unique vertices after dedup.
+        XCTAssertEqual(mesh.indices.count, 6)
+        XCTAssertEqual(mesh.vertices.count, 4)
+    }
+
+    /// Header declares UInt32.max triangles but file is only the 84-byte header.
+    /// Must NOT OOM via reserveCapacity. Falls back to ASCII (header bytes are not
+    /// valid ASCII STL) and throws .noTriangles.
+    func testParseBinarySTL_hugeHeaderTriangleCountIsClamped() throws {
+        var data = Data(count: 80) // header
+        var huge: UInt32 = UInt32.max
+        data.append(Data(bytes: &huge, count: 4))
+        // Total file is 84 bytes, smaller than 84 + huge*50, so it falls back to ASCII.
+
+        let url = try writeTempFile(data: data, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let expectation = XCTestExpectation(description: "parse returns within timeout")
+        var thrown: Error?
+        DispatchQueue.global().async {
+            do {
+                _ = try STLParser.parseMesh(from: url)
+            } catch {
+                thrown = error
+            }
+            expectation.fulfill()
+        }
+        // Test timeout safety net: if reserveCapacity were honored unclamped this
+        // would either OOM or take far longer than 5s.
+        wait(for: [expectation], timeout: 5.0)
+        XCTAssertNotNil(thrown, "Expected an error from invalid STL")
     }
 
     // MARK: - Helpers

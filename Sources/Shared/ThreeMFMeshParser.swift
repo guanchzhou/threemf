@@ -1,5 +1,7 @@
 import Foundation
+import os
 import SceneKit
+import simd
 import ZIPFoundation
 
 enum ThreeMFMeshParserError: Error, LocalizedError {
@@ -7,6 +9,8 @@ enum ThreeMFMeshParserError: Error, LocalizedError {
     case modelNotFound
     case parseFailed
     case noMeshData
+    case sizeLimitExceeded
+    case invalidComponentPath
 
     var errorDescription: String? {
         switch self {
@@ -14,13 +18,22 @@ enum ThreeMFMeshParserError: Error, LocalizedError {
         case .modelNotFound: return "3D model not found in .3mf archive"
         case .parseFailed: return "Failed to parse 3D model XML"
         case .noMeshData: return "No mesh data found in 3D model"
+        case .sizeLimitExceeded: return "3MF mesh exceeds size limits"
+        case .invalidComponentPath: return "3MF component path is invalid"
         }
     }
 }
 
+private let log = Logger(subsystem: "com.andreymaltsev.3mf-quicklook", category: "ThreeMFMeshParser")
+
 struct ThreeMFMeshParser {
-    /// Maximum allowed size for extracted model data (500 MB) to prevent ZIP bomb attacks
+    /// Maximum allowed size for any single extracted model entry (500 MB).
+    /// Both the declared central-directory size *and* the running streamed total are capped.
     private static let maxModelSize: UInt64 = 500 * 1024 * 1024
+
+    /// Aggregate caps applied across the whole 3MF (sum of all components).
+    static let maxVertices: Int = 50_000_000
+    static let maxTriangles: Int = 100_000_000
 
     private static let modelPaths = [
         "3D/3dmodel.model",
@@ -28,21 +41,54 @@ struct ThreeMFMeshParser {
         "3d/3dmodel.model",
     ]
 
+    /// Validate a component-relative path inside the archive. Rejects traversal
+    /// attempts and non-`.model` entries to harden against crafted archives.
+    private static func sanitizeComponentPath(_ path: String) -> String? {
+        let trimmed = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        guard !trimmed.isEmpty,
+              !trimmed.contains(".."),
+              !trimmed.contains("\\"),
+              !trimmed.hasPrefix("/"),
+              !trimmed.contains(":"),
+              trimmed.lowercased().hasSuffix(".model")
+        else { return nil }
+        return trimmed
+    }
+
+    /// Streams an archive entry into a Data, enforcing both declared and runtime size caps.
+    private static func extractCapped(_ archive: Archive, entry: Entry, cap: UInt64,
+                                      progress: ((Float) -> Void)? = nil) throws -> Data {
+        guard entry.uncompressedSize <= cap else {
+            throw ThreeMFMeshParserError.sizeLimitExceeded
+        }
+        let totalSize = max(entry.uncompressedSize, 1)
+        var data = Data()
+        data.reserveCapacity(Int(totalSize))
+        _ = try archive.extract(entry) { chunk in
+            // Defense against ZIP bombs: enforce the cap on the *actual* stream too.
+            if UInt64(data.count) + UInt64(chunk.count) > cap {
+                throw ThreeMFMeshParserError.sizeLimitExceeded
+            }
+            data.append(chunk)
+            progress?(Float(data.count) / Float(totalSize))
+        }
+        return data
+    }
+
     /// Progress callback: receives a value from 0.0 to 1.0
     /// Phases: 0–0.4 = ZIP extraction, 0.4–0.8 = XML scanning, 0.8–1.0 = normal computation
     static func parseMesh(from fileURL: URL, progress: ((Float) -> Void)? = nil) throws -> MeshData {
-        guard let archive = Archive(url: fileURL, accessMode: .read) else {
+        let archive: Archive
+        do {
+            archive = try Archive(url: fileURL, accessMode: .read)
+        } catch {
             throw ThreeMFMeshParserError.cannotOpenArchive
         }
 
         var modelData: Data?
         for path in modelPaths {
             if let entry = archive[path] {
-                guard entry.uncompressedSize <= maxModelSize else {
-                    throw ThreeMFMeshParserError.parseFailed
-                }
-                var data = Data()
-                _ = try archive.extract(entry) { chunk in data.append(chunk) }
+                let data = try extractCapped(archive, entry: entry, cap: maxModelSize)
                 if !data.isEmpty {
                     modelData = data
                     break
@@ -83,18 +129,22 @@ struct ThreeMFMeshParser {
             guard neededObjectIds.contains(comp.objectId) || neededObjectIds.contains(comp.parentObjectId) else {
                 continue
             }
-            let normalized = comp.path.hasPrefix("/") ? String(comp.path.dropFirst()) : comp.path
+            guard let normalized = sanitizeComponentPath(comp.path) else {
+                log.error("Rejected suspicious component path: \(comp.path, privacy: .public)")
+                continue
+            }
             if objectMeshes[comp.objectId] != nil { continue }
 
             if let entry = archive[normalized] {
-                guard entry.uncompressedSize <= maxModelSize else { continue }
-                let totalSize = max(entry.uncompressedSize, 1)
-                var data = Data()
-                data.reserveCapacity(Int(totalSize))
-                _ = try archive.extract(entry) { chunk in
-                    data.append(chunk)
-                    // 0–40%: ZIP extraction progress
-                    progress?(0.4 * Float(data.count) / Float(totalSize))
+                let data: Data
+                do {
+                    data = try extractCapped(archive, entry: entry, cap: maxModelSize) { fraction in
+                        // 0–40%: ZIP extraction progress
+                        progress?(0.4 * fraction)
+                    }
+                } catch {
+                    log.error("Component extract failed for \(normalized, privacy: .public): \(error.localizedDescription)")
+                    continue
                 }
                 if !data.isEmpty {
                     progress?(0.4)
@@ -102,18 +152,25 @@ struct ThreeMFMeshParser {
                         // 40–80%: scanning progress
                         progress?(0.4 + 0.4 * scanFraction)
                     }
-                    for (_, mesh) in compResult.objectMeshes {
-                        objectMeshes[comp.objectId] = mesh
-                        break
+                    if let firstMesh = compResult.objectMeshes.first {
+                        objectMeshes[comp.objectId] = firstMesh.value
                     }
                 }
             }
         }
 
         // Assemble: use build items (with transforms) if available,
-        // otherwise just merge all meshes
-        var allVertices: [SCNVector3] = []
+        // otherwise just merge all meshes (sorted by id for determinism)
+        var allVertices: [simd_float3] = []
         var allIndices: [UInt32] = []
+        let allMaterials: [BaseMaterial] = result.materials
+        var allTriangleMats: [Int] = []
+
+        // Aggregate caps to bound memory.
+        func canAppend(verts: Int, tris: Int) -> Bool {
+            return allVertices.count + verts <= maxVertices
+                && (allIndices.count / 3) + tris <= maxTriangles
+        }
 
         if !result.buildItems.isEmpty {
             for item in result.buildItems {
@@ -123,6 +180,10 @@ struct ThreeMFMeshParser {
                     objectMeshes: objectMeshes
                 )
                 guard let mesh = objectMeshes[meshObjId] else { continue }
+                guard canAppend(verts: mesh.vertices.count, tris: mesh.indices.count / 3) else {
+                    log.error("Skipping object \(meshObjId, privacy: .public) — would exceed aggregate caps")
+                    continue
+                }
 
                 let baseOffset = UInt32(allVertices.count)
                 let transform = item.transform
@@ -132,21 +193,42 @@ struct ThreeMFMeshParser {
                     allVertices.append(contentsOf: mesh.vertices)
                 } else {
                     allVertices.reserveCapacity(allVertices.count + mesh.vertices.count)
+                    let m = transform
                     for v in mesh.vertices {
-                        allVertices.append(applyTransform(v, transform))
+                        let x = (m[0] * v.x) + (m[3] * v.y) + (m[6] * v.z) + m[9]
+                        let y = (m[1] * v.x) + (m[4] * v.y) + (m[7] * v.z) + m[10]
+                        let z = (m[2] * v.x) + (m[5] * v.y) + (m[8] * v.z) + m[11]
+                        allVertices.append(simd_float3(x, y, z))
                     }
                 }
                 allIndices.reserveCapacity(allIndices.count + mesh.indices.count)
+                let triBase = allIndices.count / 3
                 for idx in mesh.indices {
                     allIndices.append(idx + baseOffset)
                 }
+                if !mesh.triangleMaterials.isEmpty {
+                    if allTriangleMats.count < triBase {
+                        allTriangleMats.append(contentsOf: repeatElement(-1, count: triBase - allTriangleMats.count))
+                    }
+                    allTriangleMats.append(contentsOf: mesh.triangleMaterials)
+                }
             }
         } else {
-            for (_, mesh) in objectMeshes {
+            // Sort for deterministic display order across launches.
+            for objId in objectMeshes.keys.sorted() {
+                guard let mesh = objectMeshes[objId] else { continue }
+                guard canAppend(verts: mesh.vertices.count, tris: mesh.indices.count / 3) else { continue }
                 let baseOffset = UInt32(allVertices.count)
+                let triBase = allIndices.count / 3
                 allVertices.append(contentsOf: mesh.vertices)
                 for idx in mesh.indices {
                     allIndices.append(idx + baseOffset)
+                }
+                if !mesh.triangleMaterials.isEmpty {
+                    if allTriangleMats.count < triBase {
+                        allTriangleMats.append(contentsOf: repeatElement(-1, count: triBase - allTriangleMats.count))
+                    }
+                    allTriangleMats.append(contentsOf: mesh.triangleMaterials)
                 }
             }
         }
@@ -155,8 +237,42 @@ struct ThreeMFMeshParser {
             throw ThreeMFMeshParserError.noMeshData
         }
 
+        // Pad triangleMaterials trailing tail with -1 so length matches triangle count.
+        if !allTriangleMats.isEmpty {
+            let target = allIndices.count / 3
+            if allTriangleMats.count < target {
+                allTriangleMats.append(contentsOf: repeatElement(-1, count: target - allTriangleMats.count))
+            }
+        }
+
+        // Filter out triangles with out-of-range indices before SceneKit sees them.
+        let vCount = UInt32(allVertices.count)
+        var filteredIndices: [UInt32] = []
+        filteredIndices.reserveCapacity(allIndices.count)
+        var filteredMats: [Int] = []
+        filteredMats.reserveCapacity(allTriangleMats.count)
+        var t = 0
+        while t * 3 + 2 < allIndices.count {
+            let a = allIndices[t * 3], b = allIndices[t * 3 + 1], c = allIndices[t * 3 + 2]
+            if a < vCount && b < vCount && c < vCount {
+                filteredIndices.append(a)
+                filteredIndices.append(b)
+                filteredIndices.append(c)
+                if !allTriangleMats.isEmpty, t < allTriangleMats.count {
+                    filteredMats.append(allTriangleMats[t])
+                }
+            }
+            t += 1
+        }
+
+        guard !filteredIndices.isEmpty else {
+            throw ThreeMFMeshParserError.noMeshData
+        }
+
         progress?(0.8)
-        var mesh = MeshData(vertices: allVertices, indices: allIndices, normals: nil)
+        var mesh = MeshData(vertices: allVertices, indices: filteredIndices, normals: nil)
+        mesh.materials = allMaterials
+        mesh.triangleMaterials = filteredMats
         mesh.computeNormals { normalFraction in
             // 80–100%: normal computation progress
             progress?(0.8 + 0.2 * normalFraction)
@@ -167,7 +283,7 @@ struct ThreeMFMeshParser {
     private static func resolveObjectMesh(
         objectId: String,
         components: [ComponentRef],
-        objectMeshes: [String: (vertices: [SCNVector3], indices: [UInt32])]
+        objectMeshes: [String: (vertices: [simd_float3], indices: [UInt32], triangleMaterials: [Int])]
     ) -> String {
         if objectMeshes[objectId] != nil {
             return objectId
@@ -195,20 +311,25 @@ struct BuildItem {
 
 // MARK: - Fast byte-level mesh scanner
 
+typealias ObjectMesh = (vertices: [simd_float3], indices: [UInt32], triangleMaterials: [Int])
+
 /// Scans 3MF XML bytes directly without NSXMLParser overhead.
 /// For large meshes (millions of vertices), this is 5-10x faster than NSXMLParser
 /// because it avoids String/Dictionary allocation per element.
-private enum FastMeshScanner {
+internal enum FastMeshScanner {
     struct ScanResult {
-        var objectMeshes: [String: (vertices: [SCNVector3], indices: [UInt32])]
+        var objectMeshes: [String: ObjectMesh]
         var components: [ComponentRef]
         var buildItems: [BuildItem]
+        /// Flat list of materials encountered in this scan. Triangles' indices into this list
+        /// live in `objectMeshes[*].triangleMaterials`.
+        var materials: [BaseMaterial]
     }
 
     static func scan(_ data: Data, progress: ((Float) -> Void)? = nil) -> ScanResult {
         return data.withUnsafeBytes { rawBuffer -> ScanResult in
             guard let base = rawBuffer.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
-                return ScanResult(objectMeshes: [:], components: [], buildItems: [])
+                return ScanResult(objectMeshes: [:], components: [], buildItems: [], materials: [])
             }
             let count = rawBuffer.count
             var scanner = ByteScanner(base: base, count: count)
@@ -223,13 +344,22 @@ fileprivate struct ByteScanner {
     var pos: Int = 0
 
     // Current parsing state
-    var objectMeshes: [String: (vertices: [SCNVector3], indices: [UInt32])] = [:]
+    var objectMeshes: [String: ObjectMesh] = [:]
     var components: [ComponentRef] = []
     var buildItems: [BuildItem] = []
+    var materials: [BaseMaterial] = []
+
+    /// Map: basematerials group id (`<basematerials id="N">`) → range in `materials` array.
+    private var materialGroups: [String: Range<Int>] = [:]
+    /// While inside a `<basematerials>` block, accumulate entries here.
+    private var currentMatGroupId: String?
+    private var currentMatGroupStart: Int = 0
 
     private var currentObjectId: String?
-    private var currentVertices: [SCNVector3] = []
+    private var currentVertices: [simd_float3] = []
     private var currentIndices: [UInt32] = []
+    private var currentTriMaterials: [Int] = []
+    private var hasAnyMaterial = false
     private var inMesh = false
 
     init(base: UnsafePointer<UInt8>, count: Int) {
@@ -275,7 +405,7 @@ fileprivate struct ByteScanner {
 
             // Skip closing tags quickly
             if base[pos] == ByteScanner.slash {
-                // Closing tag — check if it's </mesh> or </object>
+                // Closing tag — check if it's </mesh>, </object>, or </basematerials>
                 pos += 1
                 let tagStart = pos
                 skipToTagEnd()
@@ -284,9 +414,21 @@ fileprivate struct ByteScanner {
                     inMesh = false
                 } else if tagLen >= 6 && matchesAt(tagStart, "object") {
                     if let objId = currentObjectId, !currentVertices.isEmpty {
-                        objectMeshes[objId] = (vertices: currentVertices, indices: currentIndices)
+                        let mats = hasAnyMaterial ? currentTriMaterials : []
+                        objectMeshes[objId] = (
+                            vertices: currentVertices,
+                            indices: currentIndices,
+                            triangleMaterials: mats
+                        )
                     }
                     currentObjectId = nil
+                    hasAnyMaterial = false
+                    currentTriMaterials = []
+                } else if tagLen >= 13 && matchesAt(tagStart, "basematerials") {
+                    if let gid = currentMatGroupId {
+                        materialGroups[gid] = currentMatGroupStart..<materials.count
+                    }
+                    currentMatGroupId = nil
                 }
                 continue
             }
@@ -314,6 +456,10 @@ fileprivate struct ByteScanner {
                 parseComponent()
             case .item:
                 parseItem()
+            case .basematerials:
+                parseBaseMaterialsOpen()
+            case .base:
+                parseBaseEntry()
             default:
                 skipToTagEnd()
             }
@@ -322,14 +468,15 @@ fileprivate struct ByteScanner {
         return FastMeshScanner.ScanResult(
             objectMeshes: objectMeshes,
             components: components,
-            buildItems: buildItems
+            buildItems: buildItems,
+            materials: materials
         )
     }
 
     // MARK: - Tag name matching
 
     private enum TagKind {
-        case vertex, triangle, mesh, object, component, item, other
+        case vertex, triangle, mesh, object, component, item, basematerials, base, other
     }
 
     private mutating func readTagName() -> TagKind {
@@ -358,6 +505,7 @@ fileprivate struct ByteScanner {
         case 4:
             if matchesCaseInsensitiveAt(nameStart, "mesh") { return .mesh }
             if matchesCaseInsensitiveAt(nameStart, "item") { return .item }
+            if matchesCaseInsensitiveAt(nameStart, "base") { return .base }
         case 6:
             if matchesCaseInsensitiveAt(nameStart, "vertex") { return .vertex }
             if matchesCaseInsensitiveAt(nameStart, "object") { return .object }
@@ -365,6 +513,8 @@ fileprivate struct ByteScanner {
             if matchesCaseInsensitiveAt(nameStart, "triangle") { return .triangle }
         case 9:
             if matchesCaseInsensitiveAt(nameStart, "component") { return .component }
+        case 13:
+            if matchesCaseInsensitiveAt(nameStart, "basematerials") { return .basematerials }
         default:
             break
         }
@@ -420,13 +570,15 @@ fileprivate struct ByteScanner {
         skipToTagEnd()
 
         if gotX && gotY && gotZ {
-            currentVertices.append(SCNVector3(x, y, z))
+            currentVertices.append(simd_float3(x, y, z))
         }
     }
 
     private mutating func parseTriangle() {
         var v1: UInt32 = 0, v2: UInt32 = 0, v3: UInt32 = 0
         var gotV1 = false, gotV2 = false, gotV3 = false
+        var pid: String?
+        var p1Idx: Int?
 
         while pos < count && base[pos] != ByteScanner.gt {
             skipWhitespace()
@@ -452,18 +604,25 @@ fileprivate struct ByteScanner {
             let valEnd = pos
             if pos < count { pos += 1 }
 
-            // Match v1, v2, v3
-            if attrLen == 2 && (base[attrStart] == 0x76 || base[attrStart] == 0x56) { // 'v' or 'V'
-                let digit = base[attrStart + 1]
-                if digit == 0x31 { // '1'
-                    v1 = parseUInt32FromBytes(valStart, valEnd)
-                    gotV1 = true
-                } else if digit == 0x32 { // '2'
-                    v2 = parseUInt32FromBytes(valStart, valEnd)
-                    gotV2 = true
-                } else if digit == 0x33 { // '3'
-                    v3 = parseUInt32FromBytes(valStart, valEnd)
-                    gotV3 = true
+            // Match v1, v2, v3 (vertex indices) and p1 (per-tri material) and pid (group id).
+            if attrLen == 2 {
+                let a0 = base[attrStart], a1 = base[attrStart + 1]
+                if a0 == 0x76 || a0 == 0x56 { // 'v'/'V'
+                    if a1 == 0x31 {
+                        v1 = parseUInt32FromBytes(valStart, valEnd); gotV1 = true
+                    } else if a1 == 0x32 {
+                        v2 = parseUInt32FromBytes(valStart, valEnd); gotV2 = true
+                    } else if a1 == 0x33 {
+                        v3 = parseUInt32FromBytes(valStart, valEnd); gotV3 = true
+                    }
+                } else if (a0 == 0x70 || a0 == 0x50) && a1 == 0x31 { // 'p1'
+                    p1Idx = Int(parseUInt32FromBytes(valStart, valEnd))
+                }
+            } else if attrLen == 3 {
+                if (base[attrStart] == 0x70 || base[attrStart] == 0x50) &&
+                   (base[attrStart + 1] == 0x69 || base[attrStart + 1] == 0x49) &&
+                   (base[attrStart + 2] == 0x64 || base[attrStart + 2] == 0x44) {
+                    pid = stringFromBytes(valStart, valEnd)
                 }
             }
         }
@@ -473,6 +632,19 @@ fileprivate struct ByteScanner {
             currentIndices.append(v1)
             currentIndices.append(v2)
             currentIndices.append(v3)
+            // Resolve material: pid identifies a basematerials group, p1 is the entry within it.
+            // We map (pid, p1) to a global material index. Default to 0 when unspecified.
+            if let pid, let p1 = p1Idx, let range = materialGroups[pid] {
+                let gIdx = range.lowerBound + p1
+                if gIdx < range.upperBound {
+                    currentTriMaterials.append(gIdx)
+                    hasAnyMaterial = true
+                } else {
+                    currentTriMaterials.append(-1)
+                }
+            } else {
+                currentTriMaterials.append(-1)
+            }
         }
     }
 
@@ -480,6 +652,24 @@ fileprivate struct ByteScanner {
         currentObjectId = readStringAttribute("id")
         currentVertices = []
         currentIndices = []
+        currentTriMaterials = []
+        hasAnyMaterial = false
+        skipToTagEnd()
+    }
+
+    private mutating func parseBaseMaterialsOpen() {
+        if let id = readStringAttribute("id") {
+            currentMatGroupId = id
+            currentMatGroupStart = materials.count
+        }
+        skipToTagEnd()
+    }
+
+    private mutating func parseBaseEntry() {
+        let attrs = readAttributes(["name", "displaycolor"])
+        let name = attrs["name"] ?? ""
+        let color = parseHexColor(attrs["displaycolor"])
+        materials.append(BaseMaterial(name: name, color: color))
         skipToTagEnd()
     }
 
@@ -693,16 +883,28 @@ fileprivate struct ByteScanner {
     }
 }
 
-// MARK: - Transform helpers
+// MARK: - Transform & color helpers
 
-private func applyTransform(_ v: SCNVector3, _ m: [Float]) -> SCNVector3 {
-    let vx = Float(v.x)
-    let vy = Float(v.y)
-    let vz = Float(v.z)
-    let x = (m[0] * vx) + (m[3] * vy) + (m[6] * vz) + m[9]
-    let y = (m[1] * vx) + (m[4] * vy) + (m[7] * vz) + m[10]
-    let z = (m[2] * vx) + (m[5] * vy) + (m[8] * vz) + m[11]
-    return SCNVector3(x, y, z)
+/// Parse `displaycolor` form `#RRGGBB` or `#RRGGBBAA` into RGBA components.
+private func parseHexColor(_ s: String?) -> SIMD4<Float>? {
+    guard let s, s.hasPrefix("#") else { return nil }
+    let hex = s.dropFirst()
+    guard hex.count == 6 || hex.count == 8 else { return nil }
+    var value: UInt64 = 0
+    guard Scanner(string: String(hex)).scanHexInt64(&value) else { return nil }
+    let r, g, b, a: Float
+    if hex.count == 6 {
+        r = Float((value >> 16) & 0xFF) / 255
+        g = Float((value >> 8) & 0xFF) / 255
+        b = Float(value & 0xFF) / 255
+        a = 1
+    } else {
+        r = Float((value >> 24) & 0xFF) / 255
+        g = Float((value >> 16) & 0xFF) / 255
+        b = Float((value >> 8) & 0xFF) / 255
+        a = Float(value & 0xFF) / 255
+    }
+    return SIMD4<Float>(r, g, b, a)
 }
 
 private func parseTransformString(_ str: String) -> [Float] {

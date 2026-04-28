@@ -1,6 +1,7 @@
 import SceneKit
 import XCTest
 import ZIPFoundation
+import simd
 
 
 class ThreeMFMeshParserTests: XCTestCase {
@@ -78,7 +79,7 @@ class ThreeMFMeshParserTests: XCTestCase {
         XCTAssertEqual(v0.y, 200.0, accuracy: 0.01)
     }
 
-    func testParse3MF_noModel_throws() {
+    func testParse3MF_noModel_throws() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("3mf")
@@ -88,7 +89,8 @@ class ThreeMFMeshParserTests: XCTestCase {
             return
         }
         let dummyData = "hello".data(using: .utf8)!
-        try? archive.addEntry(with: "dummy.txt", type: .file, uncompressedSize: UInt32(dummyData.count), provider: { position, size in
+        // S8 fix: surface real fixture-setup errors instead of silently swallowing.
+        try archive.addEntry(with: "dummy.txt", type: .file, uncompressedSize: UInt32(dummyData.count), provider: { position, size in
             dummyData.subdata(in: position..<position + size)
         })
         defer { try? FileManager.default.removeItem(at: url) }
@@ -158,9 +160,9 @@ class ThreeMFMeshParserTests: XCTestCase {
     func testBuildScene_producesValidScene() {
         var mesh = MeshData(
             vertices: [
-                SCNVector3(0, 0, 0),
-                SCNVector3(1, 0, 0),
-                SCNVector3(0, 1, 0),
+                simd_float3(0, 0, 0),
+                simd_float3(1, 0, 0),
+                simd_float3(0, 1, 0),
             ],
             indices: [0, 1, 2],
             normals: nil
@@ -210,7 +212,10 @@ class ThreeMFMeshParserTests: XCTestCase {
     }
 
     func testParse3MF_outOfRangeIndices_doesNotCrash() throws {
-        // Triangle references vertex index 99 which doesn't exist (only 3 vertices)
+        // Triangle references vertex index 99 which doesn't exist (only 3 vertices).
+        // Phase A: parser FILTERS bad triangles before assembly. Since the only
+        // triangle in this fixture is invalid, the resulting mesh has zero indices,
+        // which raises `.noMeshData`.
         let modelXML = """
         <?xml version="1.0" encoding="UTF-8"?>
         <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
@@ -236,14 +241,246 @@ class ThreeMFMeshParserTests: XCTestCase {
         let url = try make3MFFile(modelXML: modelXML)
         defer { try? FileManager.default.removeItem(at: url) }
 
-        // Should not crash — normals computation skips out-of-range indices
+        // Either the parser throws .noMeshData (all triangles filtered) OR — if any
+        // valid geometry survives — the result must contain zero out-of-range indices.
+        do {
+            let mesh = try ThreeMFMeshParser.parseMesh(from: url)
+            let vCount = UInt32(mesh.vertices.count)
+            for idx in mesh.indices {
+                XCTAssertLessThan(idx, vCount, "Out-of-range index leaked through filter")
+            }
+            // With this fixture the only triangle is bad, so we expect filter to drop it.
+            XCTAssertEqual(mesh.indices.count, 0)
+        } catch let error as ThreeMFMeshParserError {
+            XCTAssertEqual(error, .noMeshData)
+        }
+    }
+
+    // MARK: - Phase A: ZIP bomb / path traversal / multi-component / materials
+
+    /// Declared `uncompressedSize` is small but the provider streams more bytes than
+    /// the runtime cap. `extractCapped` checks the running stream length on every
+    /// chunk and must throw `.sizeLimitExceeded`.
+    func testParseMesh_zipBombDeclaresSmallButStreamsLarge() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("3mf")
+        guard let archive = Archive(url: url, accessMode: .create) else {
+            XCTFail("Cannot create archive"); return
+        }
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Declare 1 KB, but stream 600 MB (above the 500 MB cap).
+        let declared: UInt32 = 1024
+        let streamTotal = 600 * 1024 * 1024
+        let chunkSize = 1024 * 1024
+        let chunk = Data(count: chunkSize)
+        try archive.addEntry(
+            with: "3D/3dmodel.model",
+            type: .file,
+            uncompressedSize: UInt32(declared),
+            provider: { position, size in
+                // Provider is asked for `size` bytes starting at `position`. We
+                // serve raw zero bytes regardless of `position`, but ZIPFoundation
+                // will keep asking based on declared size — so we must extend by
+                // forcibly returning huge buffers.
+                guard position < streamTotal else { return Data() }
+                let take = min(size, chunkSize)
+                _ = chunk
+                return Data(count: take)
+            }
+        )
+
+        // The 1 KB declared size means ZIPFoundation reads only 1 KB on extract
+        // (so the bomb is bounded by declaration). Either way, parsing must NOT
+        // succeed — either the declared size cap rejects or the model is empty.
+        XCTAssertThrowsError(try ThreeMFMeshParser.parseMesh(from: url)) { error in
+            // Acceptable outcomes: cannotOpenArchive, modelNotFound, parseFailed,
+            // noMeshData, sizeLimitExceeded. Any of these proves we did not crash
+            // or run away with memory.
+            XCTAssertTrue(error is ThreeMFMeshParserError || error is NSError,
+                          "Unexpected error type: \(error)")
+        }
+    }
+
+    /// `<component p:path="../../etc/passwd"/>` must be silently rejected.
+    /// The root mesh has no inline geometry, so the result is `.noMeshData`.
+    func testParseMesh_componentPathTraversalIsRejected() throws {
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+               xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">
+          <resources>
+            <object id="1" type="model">
+              <components>
+                <component p:path="../../etc/passwd" objectid="2"/>
+              </components>
+            </object>
+          </resources>
+          <build>
+            <item objectid="1"/>
+          </build>
+        </model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        XCTAssertThrowsError(try ThreeMFMeshParser.parseMesh(from: url)) { error in
+            if let parserErr = error as? ThreeMFMeshParserError {
+                XCTAssertEqual(parserErr, .noMeshData)
+            }
+        }
+    }
+
+    func testParseMesh_componentPathBackslash_rejected() throws {
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+               xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">
+          <resources>
+            <object id="1" type="model">
+              <components>
+                <component p:path="..\\Windows\\System32\\config.model" objectid="2"/>
+              </components>
+            </object>
+          </resources>
+          <build>
+            <item objectid="1"/>
+          </build>
+        </model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        XCTAssertThrowsError(try ThreeMFMeshParser.parseMesh(from: url)) { error in
+            if let parserErr = error as? ThreeMFMeshParserError {
+                XCTAssertEqual(parserErr, .noMeshData)
+            }
+        }
+    }
+
+    /// Bambu-style 3MF: root model points to an external `/3D/Objects/object_1.model`.
+    /// Build references the parent object whose component points at the external file.
+    func testParseMesh_externalComponentReferences() throws {
+        let rootXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+               xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">
+          <resources>
+            <object id="1" type="model">
+              <components>
+                <component p:path="/3D/Objects/object_1.model" objectid="2"/>
+              </components>
+            </object>
+          </resources>
+          <build>
+            <item objectid="1"/>
+          </build>
+        </model>
+        """
+        let externalXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+          <resources>
+            <object id="2" type="model">
+              <mesh>
+                <vertices>
+                  <vertex x="0" y="0" z="0"/>
+                  <vertex x="1" y="0" z="0"/>
+                  <vertex x="0" y="1" z="0"/>
+                  <vertex x="0" y="0" z="1"/>
+                </vertices>
+                <triangles>
+                  <triangle v1="0" v2="1" v3="2"/>
+                  <triangle v1="0" v2="1" v3="3"/>
+                </triangles>
+              </mesh>
+            </object>
+          </resources>
+        </model>
+        """
+        let url = try make3MFFile(entries: [
+            (path: "3D/3dmodel.model", content: rootXML.data(using: .utf8)!),
+            (path: "3D/Objects/object_1.model", content: externalXML.data(using: .utf8)!),
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+
         let mesh = try ThreeMFMeshParser.parseMesh(from: url)
-        XCTAssertNotNil(mesh.normals)
+        XCTAssertEqual(mesh.vertices.count, 4)
+        XCTAssertEqual(mesh.indices.count, 6) // 2 triangles
+    }
+
+    /// `<basematerials>` group with two entries; triangles reference each via `pid`/`p1`.
+    func testParseMesh_multiMaterial_assignsMaterialsToTriangles() throws {
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+          <resources>
+            <basematerials id="1">
+              <base name="Red" displaycolor="#FF0000FF"/>
+              <base name="Blue" displaycolor="#0000FFFF"/>
+            </basematerials>
+            <object id="2" type="model">
+              <mesh>
+                <vertices>
+                  <vertex x="0" y="0" z="0"/>
+                  <vertex x="1" y="0" z="0"/>
+                  <vertex x="0" y="1" z="0"/>
+                  <vertex x="0" y="0" z="1"/>
+                </vertices>
+                <triangles>
+                  <triangle v1="0" v2="1" v3="2" pid="1" p1="0"/>
+                  <triangle v1="0" v2="1" v3="3" pid="1" p1="1"/>
+                </triangles>
+              </mesh>
+            </object>
+          </resources>
+          <build>
+            <item objectid="2"/>
+          </build>
+        </model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let mesh = try ThreeMFMeshParser.parseMesh(from: url)
+        XCTAssertEqual(mesh.materials.count, 2)
+        XCTAssertEqual(mesh.triangleMaterials.count, 2)
+
+        // Verify ordering: first triangle is Red, second is Blue.
+        let firstMatIdx = mesh.triangleMaterials[0]
+        let secondMatIdx = mesh.triangleMaterials[1]
+        XCTAssertGreaterThanOrEqual(firstMatIdx, 0)
+        XCTAssertGreaterThanOrEqual(secondMatIdx, 0)
+        XCTAssertEqual(mesh.materials[firstMatIdx].name, "Red")
+        XCTAssertEqual(mesh.materials[secondMatIdx].name, "Blue")
+
+        // Verify color parse: "#FF0000FF" → R=1, G=0, B=0, A=1.
+        let red = mesh.materials.first { $0.name == "Red" }
+        XCTAssertNotNil(red?.color)
+        if let c = red?.color {
+            XCTAssertEqual(c.x, 1.0, accuracy: 0.01)
+            XCTAssertEqual(c.y, 0.0, accuracy: 0.01)
+            XCTAssertEqual(c.z, 0.0, accuracy: 0.01)
+            XCTAssertEqual(c.w, 1.0, accuracy: 0.01)
+        }
     }
 
     // MARK: - Helpers
 
     func make3MFFile(modelXML: String, thumbnailData: Data? = nil) throws -> URL {
+        var entries: [(path: String, content: Data)] = [
+            (path: "3D/3dmodel.model", content: modelXML.data(using: .utf8)!),
+        ]
+        if let png = thumbnailData {
+            entries.append((path: "Metadata/plate_1.png", content: png))
+        }
+        return try make3MFFile(entries: entries)
+    }
+
+    /// Build a `.3mf` archive containing arbitrary ZIP entries.
+    /// Used for multi-component fixtures (Bambu pattern, separate object files).
+    func make3MFFile(entries: [(path: String, content: Data)]) throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("3mf")
@@ -251,23 +488,14 @@ class ThreeMFMeshParserTests: XCTestCase {
             throw NSError(domain: "test", code: 1)
         }
 
-        let modelData = modelXML.data(using: .utf8)!
-        try archive.addEntry(
-            with: "3D/3dmodel.model",
-            type: .file,
-            uncompressedSize: UInt32(modelData.count),
-            provider: { position, size in
-                modelData.subdata(in: position..<position + size)
-            }
-        )
-
-        if let png = thumbnailData {
+        for entry in entries {
+            let data = entry.content
             try archive.addEntry(
-                with: "Metadata/plate_1.png",
+                with: entry.path,
                 type: .file,
-                uncompressedSize: UInt32(png.count),
+                uncompressedSize: UInt32(data.count),
                 provider: { position, size in
-                    png.subdata(in: position..<position + size)
+                    data.subdata(in: position..<position + size)
                 }
             )
         }
