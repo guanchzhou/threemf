@@ -1,11 +1,9 @@
 import SceneKit
+import simd
 import XCTest
 import ZIPFoundation
-import simd
-
 
 class ThreeMFMeshParserTests: XCTestCase {
-
     // MARK: - 3MF Parsing
 
     func testParse3MF_simpleInlineMesh() throws {
@@ -90,9 +88,14 @@ class ThreeMFMeshParserTests: XCTestCase {
         }
         let dummyData = "hello".data(using: .utf8)!
         // S8 fix: surface real fixture-setup errors instead of silently swallowing.
-        try archive.addEntry(with: "dummy.txt", type: .file, uncompressedSize: UInt32(dummyData.count), provider: { position, size in
-            dummyData.subdata(in: position..<position + size)
-        })
+        try archive.addEntry(
+            with: "dummy.txt",
+            type: .file,
+            uncompressedSize: UInt32(dummyData.count),
+            provider: { position, size in
+                dummyData.subdata(in: position ..< position + size)
+            }
+        )
         defer { try? FileManager.default.removeItem(at: url) }
 
         XCTAssertThrowsError(try ThreeMFMeshParser.parseMesh(from: url))
@@ -123,7 +126,7 @@ class ThreeMFMeshParserTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("3mf")
-        try "not a zip".data(using: .utf8)!.write(to: url)
+        try try XCTUnwrap("not a zip".data(using: .utf8)?.write(to: url))
         defer { try? FileManager.default.removeItem(at: url) }
 
         XCTAssertThrowsError(try ThreeMFMeshParser.parseMesh(from: url))
@@ -202,7 +205,7 @@ class ThreeMFMeshParserTests: XCTestCase {
             provider: { position, size in
                 let end = min(position + size, smallData.count)
                 guard position < smallData.count else { return Data() }
-                return smallData.subdata(in: position..<end)
+                return smallData.subdata(in: position ..< end)
             }
         )
 
@@ -298,8 +301,10 @@ class ThreeMFMeshParserTests: XCTestCase {
             // Acceptable outcomes: cannotOpenArchive, modelNotFound, parseFailed,
             // noMeshData, sizeLimitExceeded. Any of these proves we did not crash
             // or run away with memory.
-            XCTAssertTrue(error is ThreeMFMeshParserError || error is NSError,
-                          "Unexpected error type: \(error)")
+            XCTAssertTrue(
+                error is ThreeMFMeshParserError || error is NSError,
+                "Unexpected error type: \(error)"
+            )
         }
     }
 
@@ -400,8 +405,8 @@ class ThreeMFMeshParserTests: XCTestCase {
         </model>
         """
         let url = try make3MFFile(entries: [
-            (path: "3D/3dmodel.model", content: rootXML.data(using: .utf8)!),
-            (path: "3D/Objects/object_1.model", content: externalXML.data(using: .utf8)!),
+            (path: "3D/3dmodel.model", content: XCTUnwrap(rootXML.data(using: .utf8))),
+            (path: "3D/Objects/object_1.model", content: XCTUnwrap(externalXML.data(using: .utf8))),
         ])
         defer { try? FileManager.default.removeItem(at: url) }
 
@@ -495,11 +500,164 @@ class ThreeMFMeshParserTests: XCTestCase {
                 type: .file,
                 uncompressedSize: UInt32(data.count),
                 provider: { position, size in
-                    data.subdata(in: position..<position + size)
+                    data.subdata(in: position ..< position + size)
                 }
             )
         }
 
         return url
+    }
+
+    // MARK: - Metadata extraction (P1.5)
+
+    func testParse3MF_metadataExtraction() throws {
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+          <metadata name="Application">BambuStudio-1.9.0</metadata>
+          <metadata name="CreationDate">2026-04-15T10:30:00Z</metadata>
+          <metadata name="Designer">Test User</metadata>
+          <metadata name="Title">Demo Cube</metadata>
+          <metadata name="CustomKey">CustomValue</metadata>
+          <resources>
+            <object id="1" type="model">
+              <mesh>
+                <vertices>
+                  <vertex x="0" y="0" z="0" />
+                  <vertex x="1" y="0" z="0" />
+                  <vertex x="0" y="1" z="0" />
+                </vertices>
+                <triangles>
+                  <triangle v1="0" v2="1" v3="2" />
+                </triangles>
+              </mesh>
+            </object>
+          </resources>
+          <build><item objectid="1" /></build>
+        </model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let mesh = try ThreeMFMeshParser.parseMesh(from: url)
+        let md = try XCTUnwrap(mesh.metadata)
+        XCTAssertEqual(md.application, "BambuStudio-1.9.0")
+        XCTAssertEqual(md.creationDate, "2026-04-15T10:30:00Z")
+        XCTAssertEqual(md.designer, "Test User")
+        XCTAssertEqual(md.title, "Demo Cube")
+        XCTAssertEqual(md.other["CustomKey"], "CustomValue")
+    }
+
+    func testParse3MF_noMetadata_metadataIsNil() throws {
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+          <resources>
+            <object id="1" type="model">
+              <mesh>
+                <vertices>
+                  <vertex x="0" y="0" z="0" />
+                  <vertex x="1" y="0" z="0" />
+                  <vertex x="0" y="1" z="0" />
+                </vertices>
+                <triangles><triangle v1="0" v2="1" v3="2" /></triangles>
+              </mesh>
+            </object>
+          </resources>
+          <build><item objectid="1" /></build>
+        </model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let mesh = try ThreeMFMeshParser.parseMesh(from: url)
+        XCTAssertNil(mesh.metadata)
+    }
+
+    // MARK: - Multi-plate enumeration (P1.4)
+
+    func testListPlates_multiplePlates_returnsAllInOrder() throws {
+        // 1×1 PNG bytes — minimal valid PNG to satisfy archive read.
+        let pngHeader: [UInt8] = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x00, 0x00, 0x00, 0x00, 0x3B, 0x7E, 0x9B,
+            0x55, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+            0x44, 0xAE, 0x42, 0x60, 0x82,
+        ]
+        let png = Data(pngHeader)
+        let url = try make3MFFile(entries: [
+            (path: "3D/3dmodel.model", content: XCTUnwrap("<model/>".data(using: .utf8))),
+            (path: "Metadata/plate_2.png", content: png),
+            (path: "Metadata/plate_1.png", content: png),
+            (path: "Metadata/plate_3.png", content: png),
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let plates = ThreeMFExtractor.listPlates(from: url)
+        XCTAssertEqual(plates.count, 3)
+        // Sort by parsed plate index (1, 2, 3) regardless of archive order.
+        XCTAssertEqual(plates.map(\.index), [1, 2, 3])
+        XCTAssertEqual(plates[0].path, "Metadata/plate_1.png")
+        // Lazy: PNG bytes load on demand via extractPlate (throws on archive failure).
+        let data = try ThreeMFExtractor.extractPlate(plates[0], from: url)
+        XCTAssertNotNil(data)
+        XCTAssertFalse(data?.isEmpty ?? true)
+    }
+
+    // MARK: - Metadata-only fast path (P1)
+
+    func testParseMetadata_extractsTagsWithoutMeshData() throws {
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+          <metadata name="Application">BambuStudio-1.9.0</metadata>
+          <metadata name="Title">Demo</metadata>
+          <resources/>
+          <build/>
+        </model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let md = try ThreeMFMeshParser.parseMetadata(from: url)
+        XCTAssertNotNil(md)
+        XCTAssertEqual(md?.application, "BambuStudio-1.9.0")
+        XCTAssertEqual(md?.title, "Demo")
+    }
+
+    func testParseMetadata_noMetadata_returnsNil() throws {
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+          <resources/>
+          <build/>
+        </model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let md = try ThreeMFMeshParser.parseMetadata(from: url)
+        XCTAssertNil(md)
+    }
+
+    func testParseMetadata_brokenArchive_throws() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("3mf")
+        try Data("not a zip".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        XCTAssertThrowsError(try ThreeMFMeshParser.parseMetadata(from: url))
+    }
+
+    func testListPlates_noPlates_returnsEmpty() throws {
+        let url = try make3MFFile(entries: [
+            (path: "3D/3dmodel.model", content: XCTUnwrap("<model/>".data(using: .utf8))),
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        XCTAssertEqual(ThreeMFExtractor.listPlates(from: url), [])
     }
 }

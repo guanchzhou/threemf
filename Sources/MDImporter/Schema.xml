@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schema version="1.0"
+        xmlns="http://www.apple.com/metadata"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.apple.com/metadata file:///System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Resources/MetadataSchema.xsd">
+    <types>
+        <type name="com.andreymaltsev.threemf">
+            <allattrs>com_andreymaltsev_threemf_triangleCount com_andreymaltsev_threemf_vertexCount com_andreymaltsev_threemf_widthMM com_andreymaltsev_threemf_depthMM com_andreymaltsev_threemf_heightMM com_andreymaltsev_threemf_slicer</allattrs>
+            <displayattrs>com_andreymaltsev_threemf_triangleCount com_andreymaltsev_threemf_slicer</displayattrs>
+        </type>
+        <type name="public.standard-tesselated-geometry-format">
+            <allattrs>com_andreymaltsev_threemf_triangleCount com_andreymaltsev_threemf_vertexCount com_andreymaltsev_threemf_widthMM com_andreymaltsev_threemf_depthMM com_andreymaltsev_threemf_heightMM</allattrs>
+            <displayattrs>com_andreymaltsev_threemf_triangleCount</displayattrs>
+        </type>
+        <type name="com.andreymaltsev.gcode">
+            <allattrs>com_andreymaltsev_threemf_layerCount com_andreymaltsev_threemf_segmentCount com_andreymaltsev_threemf_widthMM com_andreymaltsev_threemf_depthMM com_andreymaltsev_threemf_heightMM</allattrs>
+            <displayattrs>com_andreymaltsev_threemf_layerCount com_andreymaltsev_threemf_segmentCount</displayattrs>
+        </type>
+    </types>
+    <attributes>
+        <attribute name="com_andreymaltsev_threemf_triangleCount" type="CFNumber" multivalued="false">
+            <localizedstrings>
+                <localizedstring xml:lang="en">Triangle Count</localizedstring>
+            </localizedstrings>
+        </attribute>
+        <attribute name="com_andreymaltsev_threemf_vertexCount" type="CFNumber" multivalued="false">
+            <localizedstrings>
+                <localizedstring xml:lang="en">Vertex Count</localizedstring>
+            </localizedstrings>
+        </attribute>
+        <attribute name="com_andreymaltsev_threemf_widthMM" type="CFNumber" multivalued="false">
+            <localizedstrings>
+                <localizedstring xml:lang="en">Width (mm)</localizedstring>
+            </localizedstrings>
+        </attribute>
+        <attribute name="com_andreymaltsev_threemf_depthMM" type="CFNumber" multivalued="false">
+            <localizedstrings>
+                <localizedstring xml:lang="en">Depth (mm)</localizedstring>
+            </localizedstrings>
+        </attribute>
+        <attribute name="com_andreymaltsev_threemf_heightMM" type="CFNumber" multivalued="false">
+            <localizedstrings>
+                <localizedstring xml:lang="en">Height (mm)</localizedstring>
+            </localizedstrings>
+        </attribute>
+        <attribute name="com_andreymaltsev_threemf_slicer" type="CFString" multivalued="false">
+            <localizedstrings>
+                <localizedstring xml:lang="en">Slicer</localizedstring>
+            </localizedstrings>
+        </attribute>
+        <attribute name="com_andreymaltsev_threemf_layerCount" type="CFNumber" multivalued="false">
+            <localizedstrings>
+                <localizedstring xml:lang="en">Layer Count</localizedstring>
+            </localizedstrings>
+        </attribute>
+        <attribute name="com_andreymaltsev_threemf_segmentCount" type="CFNumber" multivalued="false">
+            <localizedstrings>
+                <localizedstring xml:lang="en">Segment Count</localizedstring>
+            </localizedstrings>
+        </attribute>
+    </attributes>
+</schema>

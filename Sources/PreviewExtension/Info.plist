@@ -11,11 +11,13 @@
 	<key>CFBundleDisplayName</key>
 	<string>3MF Preview</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Andrei Maltsev. MIT License.</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSExtension</key>
@@ -29,6 +31,7 @@
 			<key>QLSupportedContentTypes</key>
 			<array>
 				<string>com.andreymaltsev.threemf</string>
+				<string>com.andreymaltsev.gcode</string>
 				<string>public.standard-tesselated-geometry-format</string>
 			</array>
 			<key>QLSupportsSearchableItems</key>

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Local pre-commit hook: runs swiftformat --lint over staged Swift files.
+# Activate with: git config core.hooksPath .githooks
+#
+# We deliberately don't auto-format on commit — the user should see the lint
+# output and run `swiftformat Sources Tests` themselves. This avoids surprise
+# diffs landing on top of carefully-staged hunks.
+
+set -e
+
+if ! command -v swiftformat >/dev/null 2>&1; then
+    echo "pre-commit: swiftformat not installed; skipping lint."
+    echo "  install: brew install swiftformat"
+    exit 0
+fi
+
+STAGED_SWIFT=$(git diff --cached --name-only --diff-filter=ACM | grep '\.swift$' || true)
+if [ -z "$STAGED_SWIFT" ]; then
+    exit 0
+fi
+
+# Run lint only against staged files. SwiftFormat's --lint exit-codes are 1 on issues.
+echo "pre-commit: linting $(echo "$STAGED_SWIFT" | wc -l | tr -d ' ') staged Swift file(s)…"
+if ! swiftformat $STAGED_SWIFT --lint; then
+    echo
+    echo "pre-commit: SwiftFormat reported issues. Run:"
+    echo "  swiftformat Sources Tests"
+    echo "and re-stage your changes."
+    exit 1
+fi
+
+exit 0

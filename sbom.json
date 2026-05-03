@@ -1,15 +1,15 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:a1b2c3d4-5678-9012-3456-789012345678",
-  "version": 1,
+  "serialNumber": "urn:uuid:BD2DDBD0-436E-4BD0-A89B-4D6C05637152",
+  "version": 3,
   "metadata": {
-    "timestamp": "2026-03-12T21:00:00Z",
+    "timestamp": "2026-05-03T13:30:00Z",
     "component": {
       "type": "application",
       "name": "threemf",
-      "version": "1.0.4",
-      "description": "Quick Look plugin for previewing .3mf and .stl 3D printing files on macOS",
+      "version": "1.3.0",
+      "description": "Quick Look plugin, Spotlight Importer, Finder Sync extension, and CLI for previewing .3mf, .stl, and .gcode files on macOS",
       "licenses": [
         {
           "license": {
@@ -33,7 +33,7 @@
     {
       "type": "library",
       "name": "ZIPFoundation",
-      "version": "0.9.19",
+      "version": "0.9.20",
       "description": "Effortless ZIP handling in Swift",
       "licenses": [
         {
@@ -42,7 +42,7 @@
           }
         }
       ],
-      "purl": "pkg:swift/github.com/weichsel/ZIPFoundation@0.9.19",
+      "purl": "pkg:swift/github.com/weichsel/ZIPFoundation@0.9.20",
       "externalReferences": [
         {
           "type": "vcs",

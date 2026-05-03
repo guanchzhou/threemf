@@ -9,20 +9,21 @@
   <a href="https://github.com/guanchzhou/threemf/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/guanchzhou/threemf/test.yml?style=flat-square&label=tests" alt="Tests"></a>
   <a href="https://github.com/guanchzhou/threemf/actions/workflows/codeql.yml"><img src="https://img.shields.io/github/actions/workflow/status/guanchzhou/threemf/codeql.yml?style=flat-square&label=CodeQL" alt="CodeQL"></a>
   <a href="https://github.com/guanchzhou/threemf/blob/main/LICENSE"><img src="https://img.shields.io/github/license/guanchzhou/threemf?style=flat-square" alt="License"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%2026+-black?style=flat-square&logo=apple" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-macOS%2014+-black?style=flat-square&logo=apple" alt="Platform">
   <img src="https://img.shields.io/badge/arch-Apple%20Silicon-black?style=flat-square&logo=apple" alt="Apple Silicon">
   <a href="https://github.com/guanchzhou/threemf/releases/latest"><img src="https://img.shields.io/github/downloads/guanchzhou/threemf/total?style=flat-square&color=green" alt="Downloads"></a>
   <img src="https://img.shields.io/badge/SLSA-Level%202-brightgreen?style=flat-square" alt="SLSA L2">
 </p>
 
-<p align="center">Quick Look plugin for previewing <code>.3mf</code> and <code>.stl</code> 3D printing files on macOS.<br>Press Space in Finder to see interactive 3D previews — no need to open a slicer.</p>
+<p align="center">Quick Look plugin for previewing <code>.3mf</code>, <code>.stl</code>, and <code>.gcode</code> 3D printing files on macOS.<br>Press Space in Finder to see interactive 3D previews — no need to open a slicer.</p>
 
 ## Features
 
 - **Instant preview** — shows the embedded thumbnail immediately for `.3mf` files, with a "Show 3D" button to load the full interactive view on demand
+- **G-code toolpath preview** with layer scrubber, animation playback, and 4 color modes (layer rainbow / travel-vs-extrusion / feedrate heatmap / uniform)
 - Interactive 3D preview with mouse rotation, pan, and zoom
 - Progress bar while loading large models (2M+ triangles)
-- Supports `.3mf` (Bambu Lab, PrusaSlicer, etc.) and `.stl` (binary and ASCII)
+- Supports `.3mf` (Bambu Lab, PrusaSlicer, etc.), `.stl` (binary and ASCII), and `.gcode`
 - Fast byte-level 3MF parser — 5–10x faster than XML-based parsing for large files
 - Signed and notarized for easy distribution
 
@@ -72,7 +73,7 @@ threemf-cli thumbnail <input> <output.png> [--size N]  # renders 3D thumbnail (d
 
 ## Requirements
 
-macOS 26 (Tahoe) or later. Apple Silicon only.
+macOS 14 (Sonoma) or later. Apple Silicon by default; release builds ship a universal binary (arm64 + x86_64).
 
 ## Build from source
 
@@ -84,25 +85,12 @@ xcodegen generate
 xcodebuild -scheme ThreeMFQuickLook -configuration Release build
 ```
 
-### Building for older macOS versions
-
-Official releases target macOS 26+, but the code is compatible with macOS 14 (Sonoma) and later. To build for an older version, override the deployment target:
-
-```
-xcodegen generate
-xcodebuild -scheme ThreeMFQuickLook -configuration Release \
-  MACOSX_DEPLOYMENT_TARGET=14.0 build
-```
-
-To include Intel support (universal binary):
+To build a universal (arm64 + x86_64) binary locally:
 
 ```
 xcodebuild -scheme ThreeMFQuickLook -configuration Release \
-  MACOSX_DEPLOYMENT_TARGET=14.0 ARCHS="arm64 x86_64" \
-  ONLY_ACTIVE_ARCH=NO build
+  ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO build
 ```
-
-> **Note:** Older versions are not tested in CI. If you encounter issues, please open an issue.
 
 ## License
 

@@ -7,34 +7,25 @@
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleName</key>
-	<string>ThreeMFThumbnailExtension</string>
+	<string>ThreeMFFinderSync</string>
 	<key>CFBundleDisplayName</key>
-	<string>3MF Thumbnail</string>
+	<string>threemf Finder</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
-	<key>NSHumanReadableCopyright</key>
-	<string>Copyright © 2026 Andrei Maltsev. MIT License.</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Andrei Maltsev. MIT License.</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>
-		<string>com.apple.quicklook.thumbnail</string>
+		<string>com.apple.FinderSync</string>
 		<key>NSExtensionPrincipalClass</key>
-		<string>$(PRODUCT_MODULE_NAME).ThumbnailProvider</string>
-		<key>NSExtensionAttributes</key>
-		<dict>
-			<key>QLSupportedContentTypes</key>
-			<array>
-				<string>com.andreymaltsev.threemf</string>
-				<string>com.andreymaltsev.gcode</string>
-				<string>public.standard-tesselated-geometry-format</string>
-			</array>
-		</dict>
+		<string>$(PRODUCT_MODULE_NAME).FinderSyncExtension</string>
 	</dict>
 </dict>
 </plist>

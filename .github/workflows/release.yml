@@ -19,8 +19,14 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Compute build number
+        id: buildnum
+        run: echo "build=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Build
-        run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFQuickLook -configuration Release build CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO MACOSX_DEPLOYMENT_TARGET=14.0 ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO
+        env:
+          BUILD_NUMBER: ${{ steps.buildnum.outputs.build }}
+        run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFQuickLook -configuration Release build CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO MACOSX_DEPLOYMENT_TARGET=14.0 ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
 
       - name: Run tests
         run: xcodebuild -project threemf.xcodeproj -scheme ThreeMFTests -configuration Debug test CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO MACOSX_DEPLOYMENT_TARGET=14.0 ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO
@@ -54,6 +60,8 @@ jobs:
             Sources/HostApp/HostApp.entitlements
             Sources/PreviewExtension/PreviewExtension.entitlements
             Sources/ThumbnailExtension/ThumbnailExtension.entitlements
+            Sources/MDImporter/MDImporter.entitlements
+            Sources/FinderSync/FinderSync.entitlements
             CHANGELOG.md
 
       - name: Download unsigned artifact
@@ -96,8 +104,35 @@ jobs:
 
           codesign --force --options runtime \
             --sign "Developer ID Application: Andrei Maltsev (DDZR8BZJYU)" \
+            --entitlements Sources/FinderSync/FinderSync.entitlements \
+            threemf.app/Contents/PlugIns/ThreeMFFinderSync.appex
+
+          codesign --force --options runtime \
+            --sign "Developer ID Application: Andrei Maltsev (DDZR8BZJYU)" \
+            --entitlements Sources/MDImporter/MDImporter.entitlements \
+            threemf.app/Contents/Library/Spotlight/ThreeMFMDImporter.mdimporter
+
+          codesign --force --options runtime \
+            --sign "Developer ID Application: Andrei Maltsev (DDZR8BZJYU)" \
             --entitlements Sources/HostApp/HostApp.entitlements \
             threemf.app
+
+      - name: Verify universal binaries
+        run: |
+          set -e
+          BINARIES=(
+            "threemf.app/Contents/MacOS/threemf"
+            "threemf.app/Contents/PlugIns/ThreeMFFinderSync.appex/Contents/MacOS/ThreeMFFinderSync"
+            "threemf.app/Contents/PlugIns/ThreeMFPreviewExtension.appex/Contents/MacOS/ThreeMFPreviewExtension"
+            "threemf.app/Contents/PlugIns/ThreeMFThumbnailExtension.appex/Contents/MacOS/ThreeMFThumbnailExtension"
+            "threemf.app/Contents/Library/Spotlight/ThreeMFMDImporter.mdimporter/Contents/MacOS/ThreeMFMDImporter"
+          )
+          for bin in "${BINARIES[@]}"; do
+            info=$(lipo -info "$bin")
+            echo "$info"
+            echo "$info" | grep -q "arm64" || { echo "FAIL: missing arm64 in $bin"; exit 1; }
+            echo "$info" | grep -q "x86_64" || { echo "FAIL: missing x86_64 in $bin"; exit 1; }
+          done
 
       - name: Notarize app
         env:
@@ -171,7 +206,7 @@ jobs:
             desc "Quick Look plugin for previewing .3mf and .stl 3D printing files"
             homepage "https://github.com/guanchzhou/threemf"
 
-            depends_on macos: ">= :tahoe"
+            depends_on macos: ">= :sonoma"
 
             app "threemf.app"
 

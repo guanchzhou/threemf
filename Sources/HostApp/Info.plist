@@ -11,11 +11,15 @@
 	<key>CFBundleDisplayName</key>
 	<string>threemf</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Andrei Maltsev. MIT License.</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>UTExportedTypeDeclarations</key>
@@ -39,6 +43,24 @@
 				<key>public.mime-type</key>
 				<array>
 					<string>application/vnd.ms-package.3dmanufacturing-3dmodel+xml</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.andreymaltsev.gcode</string>
+			<key>UTTypeDescription</key>
+			<string>G-Code Toolpath</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.plain-text</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>gcode</string>
 				</array>
 			</dict>
 		</dict>

@@ -1,10 +1,8 @@
 import SceneKit
-import XCTest
 import simd
-
+import XCTest
 
 class STLParserTests: XCTestCase {
-
     // MARK: - Binary STL
 
     func testParseBinarySTL_singleTriangle() throws {
@@ -115,7 +113,7 @@ class STLParserTests: XCTestCase {
 
     // MARK: - MeshData normals
 
-    func testComputeNormals_flatTriangle() {
+    func testComputeNormals_flatTriangle() throws {
         var mesh = MeshData(
             vertices: [
                 simd_float3(0, 0, 0),
@@ -129,7 +127,7 @@ class STLParserTests: XCTestCase {
 
         XCTAssertNotNil(mesh.normals)
         // Normal should point in +Z direction for this CCW triangle in XY plane
-        for n in mesh.normals! {
+        for n in try XCTUnwrap(mesh.normals) {
             XCTAssertEqual(n.z, 1.0, accuracy: 0.01)
         }
     }
@@ -160,7 +158,7 @@ class STLParserTests: XCTestCase {
     /// valid ASCII STL) and throws .noTriangles.
     func testParseBinarySTL_hugeHeaderTriangleCountIsClamped() throws {
         var data = Data(count: 80) // header
-        var huge: UInt32 = UInt32.max
+        var huge = UInt32.max
         data.append(Data(bytes: &huge, count: 4))
         // Total file is 84 bytes, smaller than 84 + huge*50, so it falls back to ASCII.
 
@@ -221,5 +219,195 @@ class STLParserTests: XCTestCase {
 
     func writeTempFile(string: String, ext: String) throws -> URL {
         try writeTempFile(data: string.data(using: .utf8)!, ext: ext)
+    }
+
+    // MARK: - ASCII STL byte-parser edge cases
+
+    func testParseASCIISTL_scientificNotation() throws {
+        // Slicers occasionally emit floats in scientific form. The byte parser must accept them.
+        let ascii = """
+        solid sci
+          facet normal 0 0 1
+            outer loop
+              vertex 1.5e-3 0 0
+              vertex 2 0 0
+              vertex 0 2.0E+1 0
+            endloop
+          endfacet
+        endsolid sci
+        """
+        let url = try writeTempFile(string: ascii, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let mesh = try STLParser.parseMesh(from: url)
+        XCTAssertEqual(mesh.vertices.count, 3)
+        XCTAssertEqual(mesh.indices.count, 3)
+        XCTAssertEqual(mesh.vertices[0].x, 0.0015, accuracy: 1e-7)
+        XCTAssertEqual(mesh.vertices[2].y, 20.0, accuracy: 1e-5)
+    }
+
+    // MARK: - Parallel binary STL parser (P2)
+
+    func testParseBinarySTL_aboveThreshold_usesParallelPath_andMatches() throws {
+        // STLParser switches to multi-core parsing at >=100k triangles. This test
+        // generates a fixture above the threshold and verifies the parallel path produces
+        // a consistent vertex/index count. Catches accidental races in the chunk merge.
+        let triangleCount = 120_000
+        let data = makeBinarySTL(triangles: gridTriangles(count: triangleCount))
+        let url = try writeTempFile(data: data, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let mesh = try STLParser.parseMesh(from: url)
+        // Triangle count is preserved — every input triangle yields 3 indices.
+        XCTAssertEqual(mesh.indices.count, triangleCount * 3)
+        // Vertex dedup must produce a number > 0 and ≤ 3 × triangle count.
+        XCTAssertGreaterThan(mesh.vertices.count, 0)
+        XCTAssertLessThanOrEqual(mesh.vertices.count, triangleCount * 3)
+        // All indices must reference a valid vertex.
+        let vCount = UInt32(mesh.vertices.count)
+        XCTAssertTrue(mesh.indices.allSatisfy { $0 < vCount })
+        // Normals computed.
+        XCTAssertEqual(mesh.normals?.count, mesh.vertices.count)
+    }
+
+    /// Same input run through both binary parsers; output must agree on vertex count,
+    /// triangle count, and triangle set (as quantized coordinate triples). This is the
+    /// regression net for the parallel-merge logic.
+    func testParseBinarySTL_serialAndParallel_agree() throws {
+        let triangleCount = 5000
+        let triangles = gridTriangles(count: triangleCount)
+        let data = makeBinarySTL(triangles: triangles)
+
+        let serial = try STLParser.parseBinarySerial(data: data, triangleCount: triangleCount)
+        let parallel = try STLParser.parseBinaryParallel(data: data, triangleCount: triangleCount)
+
+        XCTAssertEqual(serial.vertices.count, parallel.vertices.count)
+        XCTAssertEqual(serial.indices.count, parallel.indices.count)
+        XCTAssertEqual(serial.indices.count / 3, triangleCount)
+
+        // Compare triangle sets — vertex ordering may legitimately differ between paths
+        // because chunks discover unique vertices in different orders, but the unordered
+        // set of (vertex-coord-triple, vertex-coord-triple, vertex-coord-triple) per
+        // triangle must be identical.
+        XCTAssertEqual(triangleSet(serial), triangleSet(parallel))
+    }
+
+    /// Quantized triangle coordinates as a hashable set.
+    private func triangleSet(_ mesh: MeshData) -> Set<[Int32]> {
+        var out = Set<[Int32]>()
+        let count = mesh.indices.count / 3
+        for t in 0 ..< count {
+            let a = mesh.vertices[Int(mesh.indices[t * 3])]
+            let b = mesh.vertices[Int(mesh.indices[t * 3 + 1])]
+            let c = mesh.vertices[Int(mesh.indices[t * 3 + 2])]
+            // Sort the three vertex tuples so the same triangle hashes the same regardless
+            // of winding order quirks (we don't expect any here, but defensive).
+            let q = [
+                quantize(a),
+                quantize(b),
+                quantize(c),
+            ].sorted { lhs, rhs in
+                if lhs[0] != rhs[0] { return lhs[0] < rhs[0] }
+                if lhs[1] != rhs[1] { return lhs[1] < rhs[1] }
+                return lhs[2] < rhs[2]
+            }
+            out.insert(q.flatMap(\.self))
+        }
+        return out
+    }
+
+    private func quantize(_ v: simd_float3) -> [Int32] {
+        [
+            Int32((v.x * 10000).rounded()),
+            Int32((v.y * 10000).rounded()),
+            Int32((v.z * 10000).rounded()),
+        ]
+    }
+
+    /// Builds `count` triangles on a small grid lattice so vertex dedup is exercised.
+    private func gridTriangles(count: Int) -> [Triangle] {
+        var out: [Triangle] = []
+        out.reserveCapacity(count)
+        let side = max(2, Int(Double(count).squareRoot()) + 1)
+        outer: for i in 0 ..< side {
+            for j in 0 ..< side {
+                let x = Float(i % 8)
+                let y = Float(j % 8)
+                let z = Float((i + j) % 4)
+                out.append(Triangle(
+                    normal: (0, 0, 1),
+                    v1: (x, y, z),
+                    v2: (x + 1, y, z),
+                    v3: (x, y + 1, z)
+                ))
+                if out.count >= count { break outer }
+            }
+        }
+        return out
+    }
+
+    func testParseSTL_solidPrefixedASCII_parsesAsASCII() throws {
+        // Standard ASCII STL — must parse via the ASCII path because the prefix is "solid".
+        let ascii = """
+        solid example
+          facet normal 0 0 1
+            outer loop
+              vertex 0 0 0
+              vertex 1 0 0
+              vertex 0 1 0
+            endloop
+          endfacet
+        endsolid example
+        """
+        let url = try writeTempFile(string: ascii, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let mesh = try STLParser.parseMesh(from: url)
+        XCTAssertEqual(mesh.indices.count, 3)
+    }
+
+    func testParseSTL_solidPrefixedBinary_fallsBackToBinary() throws {
+        // Construct a binary STL whose 80-byte header happens to begin with "solid"
+        // (some buggy slicers do this). The ASCII path will fail (no `vertex` tokens)
+        // and we should fall through to binary parsing.
+        var data = Data()
+        try data.append(XCTUnwrap("solid junk header — actual binary STL follows".data(using: .utf8)))
+        // Pad header to exactly 80 bytes.
+        if data.count < 80 {
+            data.append(Data(count: 80 - data.count))
+        } else {
+            data = data.prefix(80)
+        }
+        // 1 triangle.
+        var count: UInt32 = 1
+        data.append(Data(bytes: &count, count: 4))
+        var values: [Float] = [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0]
+        data.append(Data(bytes: &values, count: 48))
+        var attr: UInt16 = 0
+        data.append(Data(bytes: &attr, count: 2))
+
+        let url = try writeTempFile(data: data, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let mesh = try STLParser.parseMesh(from: url)
+        XCTAssertEqual(mesh.indices.count, 3) // 1 triangle, 3 indices
+    }
+
+    func testParseASCIISTL_tabSeparatedAndCRLF() throws {
+        // Mix of tabs, multiple spaces, and CRLF — common when files come from Windows tools.
+        let ascii =
+            "solid x\r\n" +
+            "  facet normal 0 0 1\r\n" +
+            "    outer loop\r\n" +
+            "      vertex\t0\t0\t0\r\n" +
+            "      vertex   1   0   0\r\n" +
+            "      vertex 0 1 0\r\n" +
+            "    endloop\r\n" +
+            "  endfacet\r\n" +
+            "endsolid x\r\n"
+        let url = try writeTempFile(string: ascii, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let mesh = try STLParser.parseMesh(from: url)
+        XCTAssertEqual(mesh.vertices.count, 3)
+        XCTAssertEqual(mesh.indices.count, 3)
     }
 }

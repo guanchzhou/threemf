@@ -35,5 +35,4 @@ jobs:
       - name: SwiftFormat lint
         run: |
           brew install swiftformat
-          swiftformat --lint Sources Tests --reporter github-actions-log
-        continue-on-error: true  # non-blocking initially; flip to false once codebase is clean
+          swiftformat Sources Tests --lint --reporter github-actions-log

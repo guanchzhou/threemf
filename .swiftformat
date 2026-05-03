@@ -1,6 +1,7 @@
---swiftversion 5.9
+--swiftversion 6.0
 --indent 4
 --maxwidth 120
 --wraparguments before-first
 --wrapparameters before-first
 --disable redundantSelf,trailingCommas
+--exclude Sources/HostApp/BuildInfo.generated.swift

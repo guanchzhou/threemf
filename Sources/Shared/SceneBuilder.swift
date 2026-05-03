@@ -2,8 +2,8 @@ import AppKit
 import SceneKit
 import simd
 
-struct SceneBuilder {
-    static func buildScene(from mesh: MeshData) -> SCNScene {
+public enum SceneBuilder {
+    public static func buildScene(from mesh: MeshData) -> SCNScene {
         let scene = SCNScene()
 
         // Geometry: build SCNGeometrySource directly from the simd_float3 buffer
@@ -95,7 +95,10 @@ struct SceneBuilder {
 
     /// Wrap a `[simd_float3]` buffer as an SCNGeometrySource without per-vertex copies.
     /// stride = 16 (simd_float3 is 16-byte aligned); SceneKit reads the first 12 bytes per stride.
-    private static func makeFloatSource(_ buffer: [simd_float3], semantic: SCNGeometrySource.Semantic) -> SCNGeometrySource {
+    private static func makeFloatSource(
+        _ buffer: [simd_float3],
+        semantic: SCNGeometrySource.Semantic
+    ) -> SCNGeometrySource {
         let stride = MemoryLayout<simd_float3>.stride
         let data = buffer.withUnsafeBufferPointer { Data(buffer: $0) }
         return SCNGeometrySource(
@@ -123,7 +126,7 @@ struct SceneBuilder {
 
         // Group triangles by material index. -1 (default) becomes its own group.
         var groups: [Int: [UInt32]] = [:]
-        for t in 0..<triCount {
+        for t in 0 ..< triCount {
             let m = mesh.triangleMaterials[t]
             let i0 = mesh.indices[t * 3]
             let i1 = mesh.indices[t * 3 + 1]
@@ -145,7 +148,7 @@ struct SceneBuilder {
     }
 
     /// Materials in the same order as elements emitted by `makeElements`.
-    private static func makeMaterials(mesh: MeshData, elementCount: Int) -> [SCNMaterial] {
+    private static func makeMaterials(mesh: MeshData, elementCount _: Int) -> [SCNMaterial] {
         let defaultMaterial = makeDefaultMaterial()
 
         guard !mesh.triangleMaterials.isEmpty, !mesh.materials.isEmpty else {
@@ -181,6 +184,94 @@ struct SceneBuilder {
             mat.isDoubleSided = true
             return mat
         }
+    }
+
+    /// Builds an XYZ axis gizmo (3 colored cylinders + spheres at the origin).
+    /// Caller decides where to place it; the node is sized to ~0.4 units.
+    public static func makeAxisGizmoNode() -> SCNNode {
+        let root = SCNNode()
+        root.name = "axisGizmo"
+        let length: CGFloat = 0.4
+        let radius: CGFloat = 0.012
+        let halfF = Float(length) / 2
+        let halfPi: Float = .pi / 2
+        struct AxisSpec { let axis: simd_float3; let color: NSColor; let euler: SCNVector3 }
+        let specs: [AxisSpec] = [
+            AxisSpec(
+                axis: simd_float3(1, 0, 0),
+                color: .systemRed,
+                euler: SCNVector3(0, 0, -halfPi)
+            ),
+            AxisSpec(
+                axis: simd_float3(0, 1, 0),
+                color: .systemGreen,
+                euler: SCNVector3(0, 0, 0)
+            ),
+            AxisSpec(
+                axis: simd_float3(0, 0, 1),
+                color: .systemBlue,
+                euler: SCNVector3(halfPi, 0, 0)
+            ),
+        ]
+        for spec in specs {
+            let cylinder = SCNCylinder(radius: radius, height: length)
+            let mat = SCNMaterial()
+            mat.diffuse.contents = spec.color
+            mat.lightingModel = .constant
+            cylinder.firstMaterial = mat
+            let node = SCNNode(geometry: cylinder)
+            node.eulerAngles = spec.euler
+            // Translate halfway along the axis so the cylinder starts at origin.
+            node.position = SCNVector3(spec.axis.x * halfF, spec.axis.y * halfF, spec.axis.z * halfF)
+            root.addChildNode(node)
+        }
+        return root
+    }
+
+    /// Builds a wireframe grid plane representing the print bed.
+    /// `extent` is half-width per side; `divisions` controls density.
+    public static func makeBedGridNode(extent: Float = 1.2, divisions: Int = 12) -> SCNNode {
+        let root = SCNNode()
+        root.name = "bedGrid"
+        let step = (extent * 2) / Float(divisions)
+        var verts: [simd_float3] = []
+        var idx: [UInt32] = []
+        for i in 0 ... divisions {
+            let v = -extent + Float(i) * step
+            // X-aligned line
+            verts.append(simd_float3(-extent, 0, v))
+            verts.append(simd_float3(extent, 0, v))
+            // Z-aligned line
+            verts.append(simd_float3(v, 0, -extent))
+            verts.append(simd_float3(v, 0, extent))
+        }
+        for i in 0 ..< UInt32(verts.count) {
+            idx.append(i)
+        }
+
+        let stride = MemoryLayout<simd_float3>.stride
+        let data = verts.withUnsafeBufferPointer { Data(buffer: $0) }
+        let source = SCNGeometrySource(
+            data: data,
+            semantic: .vertex,
+            vectorCount: verts.count,
+            usesFloatComponents: true,
+            componentsPerVector: 3,
+            bytesPerComponent: MemoryLayout<Float>.stride,
+            dataOffset: 0,
+            dataStride: stride
+        )
+        let element = SCNGeometryElement(indices: idx, primitiveType: .line)
+        let geometry = SCNGeometry(sources: [source], elements: [element])
+        let mat = SCNMaterial()
+        mat.diffuse.contents = NSColor.tertiaryLabelColor
+        mat.lightingModel = .constant
+        geometry.firstMaterial = mat
+        let node = SCNNode(geometry: geometry)
+        // Place the grid just below the model's bottom (model is normalized to ±1).
+        node.position = SCNVector3(0, -1, 0)
+        root.addChildNode(node)
+        return root
     }
 
     private static func makeDefaultMaterial() -> SCNMaterial {

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleName</key>
+	<string>threemf MDImporter</string>
+	<key>CFBundleDisplayName</key>
+	<string>threemf Spotlight Importer</string>
+	<key>CFBundlePackageType</key>
+	<string>MDIM</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Andrei Maltsev. MIT License.</string>
+	<key>CFPlugInDynamicRegistration</key>
+	<string>NO</string>
+	<key>CFPlugInFactories</key>
+	<dict>
+		<key>BAD2CD2F-A277-418E-AE96-DC531D69FB35</key>
+		<string>MetadataImporterPluginFactory</string>
+	</dict>
+	<key>CFPlugInTypes</key>
+	<dict>
+		<!-- kMDImporterTypeID = 8B08C4BF-415B-11D8-B3F9-0003936726FC -->
+		<key>8B08C4BF-415B-11D8-B3F9-0003936726FC</key>
+		<array>
+			<string>BAD2CD2F-A277-418E-AE96-DC531D69FB35</string>
+		</array>
+	</dict>
+	<key>LSItemContentTypes</key>
+	<array>
+		<string>com.andreymaltsev.threemf</string>
+		<string>com.andreymaltsev.gcode</string>
+		<string>public.standard-tesselated-geometry-format</string>
+	</array>
+</dict>
+</plist>
