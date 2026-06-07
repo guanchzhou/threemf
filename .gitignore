@@ -7,3 +7,6 @@ build/
 *.xcuserstate
 Pods/
 .swiftpm/
+
+# Agent task artifacts
+tasks/

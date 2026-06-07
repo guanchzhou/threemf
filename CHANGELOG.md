@@ -4,6 +4,19 @@ All notable changes to threemf are documented here. Format: Keep a Changelog. Ve
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-06-07
+### Added
+- **True-color 3MF previews**: previews now render real filament colors instead of flat grey. Two Bambu/Orca color mechanisms are decoded — per-object extruder assignment (`Metadata/model_settings.config` → `filament_colour` palette) and per-triangle MMU paint (`paint_color`). A painted single-object model like the Minecraft dragon egg renders black with purple speckles; a multi-object model like the chicken renders each part in its filament color.
+- **3D multi-plate preview**: multi-plate Bambu/Orca projects now render one plate at a time (default: plate 1), framed to that plate. Switch plates with `←` / `→` or the on-screen `‹ ›` chevrons; the label shows `Plate i / n · Name` and the HUD reflects the visible plate. Single-plate and STL files are unaffected.
+- **CLI**: `threemf-cli thumbnail <in> <out.png> --plate N` renders a single plate (1-based).
+- **Info HUD**: close (`×`) button to dismiss the overlay.
+
+### Changed
+- **Camera framing**: models now fill ~90% of the preview frame instead of ~50%. The camera distance is fitted to the model's silhouette using an aspect-independent vertical field of view. Applies to mesh and G-code scenes.
+
+### Fixed
+- **Plate switcher counted phantom plates**: per-plate PNG variants (`plate_<N>_small.png`, `plate_no_light_<N>.png`, `top_<N>.png`) were each counted as a plate, e.g. "Plate 1 / 20" for a 5-plate file. `listPlates` now returns one entry per real plate (canonical `plate_<N>.png`, falling back to `top_<N>.png`).
+
 ## [1.3.0] - 2026-05-03
 ### Added
 - **G-code preview**: `.gcode` files now render their toolpath in Quick Look. Layer scrubber at the bottom (drag the slider or use `↑/↓`); animation playback (`p`); 4 color modes via `c` (layer rainbow / travel-vs-extrusion / feedrate heatmap / uniform).

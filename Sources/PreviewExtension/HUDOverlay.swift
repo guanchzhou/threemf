@@ -34,6 +34,10 @@ struct ToolpathHUDStats {
 /// Translucent panel showing triangle/vertex/bbox/volume/file/metadata. Toggleable via `i`.
 final class HUDOverlay: NSVisualEffectView {
     private let label = NSTextField(labelWithString: "")
+    private let closeButton = NSButton()
+
+    /// Invoked when the user clicks the close (×) button. Wire to `toggleHUD`.
+    var onClose: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -65,12 +69,34 @@ final class HUDOverlay: NSVisualEffectView {
         label.lineBreakMode = .byWordWrapping
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
+
+        closeButton.title = "×"
+        closeButton.isBordered = false
+        closeButton.bezelStyle = .accessoryBarAction
+        closeButton.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .medium)
+        closeButton.contentTintColor = .secondaryLabelColor
+        closeButton.target = self
+        closeButton.action = #selector(handleClose)
+        closeButton.setButtonType(.momentaryChange)
+        closeButton.toolTip = String(localized: "Hide info")
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(closeButton)
+
         NSLayoutConstraint.activate([
             label.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            label.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
+
+            closeButton.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            closeButton.widthAnchor.constraint(equalToConstant: 18),
+            closeButton.heightAnchor.constraint(equalToConstant: 18),
         ])
+    }
+
+    @objc private func handleClose() {
+        onClose?()
     }
 
     func update(stats: HUDStats) {

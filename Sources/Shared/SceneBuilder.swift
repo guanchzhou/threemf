@@ -42,18 +42,27 @@ public enum SceneBuilder {
             maxBound.z - minBound.z
         )
         let maxDim = max(size.x, size.y, size.z)
-        if maxDim > 0 {
-            let scale = 2.0 / Float(maxDim)
-            modelNode.scale = SCNVector3(scale, scale, scale)
-        }
+        let normalizeScale: Float = maxDim > 0 ? 2.0 / Float(maxDim) : 1.0
+        modelNode.scale = SCNVector3(normalizeScale, normalizeScale, normalizeScale)
 
-        // Camera — front-right, slightly above (classic 3/4 view)
+        // Camera — front-right, slightly above (classic 3/4 view). The distance is fitted
+        // to the model's silhouette so it fills ~90% of the frame, rather than a fixed
+        // position that over-margins non-cubic models (e.g. tall/flat parts).
+        let halfExtents = simd_float3(Float(size.x), Float(size.y), Float(size.z)) * (0.5 * normalizeScale)
         let cameraNode = SCNNode()
         cameraNode.name = "camera"
         cameraNode.camera = SCNCamera()
         cameraNode.camera?.automaticallyAdjustsZRange = true
+        // Pin the FOV to the vertical axis so framing is aspect-independent: the preview
+        // pane is landscape, so vertical is the limiting dimension.
+        cameraNode.camera?.projectionDirection = .vertical
         cameraNode.camera?.fieldOfView = 45
-        cameraNode.position = SCNVector3(-2.5, 1.5, 4)
+        cameraNode.position = fittedCameraPosition(
+            halfExtents: halfExtents,
+            direction: simd_float3(-2.5, 1.5, 4),
+            fovDegrees: 45,
+            fill: 0.9
+        )
         cameraNode.look(at: SCNVector3(0, 0, 0))
         scene.rootNode.addChildNode(cameraNode)
 
@@ -92,6 +101,40 @@ public enum SceneBuilder {
     }
 
     // MARK: - Helpers
+
+    /// Camera position along `direction` (from the origin, where the centered model sits)
+    /// that frames a box of the given half-extents so its view-plane silhouette fills
+    /// roughly `fill` of the vertical field of view.
+    ///
+    /// Aspect-independent: it fits the smallest enclosing circle of the box's corners in
+    /// the plane perpendicular to the view direction, so the result never clips vertically
+    /// regardless of the pane's aspect ratio (the camera uses a `.vertical` projection).
+    static func fittedCameraPosition(
+        halfExtents h: simd_float3,
+        direction: simd_float3,
+        fovDegrees: Float,
+        fill: Float
+    ) -> SCNVector3 {
+        let dir = simd_length(direction) > 0 ? simd_normalize(direction) : simd_float3(0, 0, 1)
+        // Radius of the enclosing circle in the view plane: the largest perpendicular
+        // distance from the view axis to any of the 8 box corners.
+        var rPerp: Float = 0
+        for sx: Float in [-1, 1] {
+            for sy: Float in [-1, 1] {
+                for sz: Float in [-1, 1] {
+                    let corner = simd_float3(sx * h.x, sy * h.y, sz * h.z)
+                    let along = simd_dot(corner, dir)
+                    rPerp = max(rPerp, simd_length(corner - along * dir))
+                }
+            }
+        }
+        guard rPerp > 0 else { return SCNVector3(dir.x, dir.y, dir.z) }
+        let halfFOV = (fovDegrees * .pi / 180) / 2
+        // Clamp the usable angle so a degenerate fill never divides by ~0.
+        let usable = max(0.05, tan(halfFOV * min(max(fill, 0.1), 1.0)))
+        let dist = rPerp / usable
+        return SCNVector3(dir.x * dist, dir.y * dist, dir.z * dist)
+    }
 
     /// Wrap a `[simd_float3]` buffer as an SCNGeometrySource without per-vertex copies.
     /// stride = 16 (simd_float3 is 16-byte aligned); SceneKit reads the first 12 bytes per stride.

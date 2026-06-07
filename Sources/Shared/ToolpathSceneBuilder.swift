@@ -39,18 +39,24 @@ public enum ToolpathSceneBuilder {
         modelNode.pivot = SCNMatrix4MakeTranslation(center.x, center.y, center.z)
         let dims = hi - lo
         let maxDim = max(dims.x, max(dims.y, dims.z))
-        if maxDim > 0 {
-            let scale = 2.0 / maxDim
-            modelNode.scale = SCNVector3(scale, scale, scale)
-        }
+        let normalizeScale: Float = maxDim > 0 ? 2.0 / maxDim : 1.0
+        modelNode.scale = SCNVector3(normalizeScale, normalizeScale, normalizeScale)
 
-        // Camera (3/4 view, matching SceneBuilder.buildScene defaults).
+        // Camera (3/4 view, matching SceneBuilder.buildScene defaults) with the same
+        // silhouette-fitted distance so framing is consistent across mesh and toolpath.
+        let halfExtents = dims * (0.5 * normalizeScale)
         let cameraNode = SCNNode()
         cameraNode.name = "camera"
         cameraNode.camera = SCNCamera()
         cameraNode.camera?.automaticallyAdjustsZRange = true
+        cameraNode.camera?.projectionDirection = .vertical
         cameraNode.camera?.fieldOfView = 45
-        cameraNode.position = SCNVector3(-2.5, 1.5, 4)
+        cameraNode.position = SceneBuilder.fittedCameraPosition(
+            halfExtents: halfExtents,
+            direction: simd_float3(-2.5, 1.5, 4),
+            fovDegrees: 45,
+            fill: 0.9
+        )
         cameraNode.look(at: SCNVector3(0, 0, 0))
         scene.rootNode.addChildNode(cameraNode)
 

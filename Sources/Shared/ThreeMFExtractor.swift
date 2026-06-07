@@ -123,38 +123,30 @@ public enum ThreeMFExtractor {
             return []
         }
 
-        var found: [(idx: Int?, path: String)] = []
+        // One entry per real plate. Bambu emits several PNGs per plate
+        // (`plate_<N>.png`, `plate_<N>_small.png`, `plate_no_light_<N>.png`, `top_<N>.png`);
+        // only the canonical full-size render — basename exactly `plate_<N>.png` or, as a
+        // fallback, `top_<N>.png` — counts as a plate. Anything with an extra suffix is a variant.
+        // `kind` 0 = plate (preferred), 1 = top; we keep one path per plate index.
+        var byIndex: [Int: (kind: Int, path: String)] = [:]
         var scanned = 0
 
         for entry in archive {
             scanned += 1
             if scanned > maxFallbackEntries { break }
-            let path = entry.path
-            let lower = path.lowercased()
-            // Bambu/Orca plate convention: Metadata/plate_<N>.png (and top_<N>.png variants).
-            guard lower.hasPrefix("metadata/"),
-                  lower.hasSuffix(".png"),
-                  lower.contains("plate_") || lower.contains("top_")
-            else { continue }
+            let lower = entry.path.lowercased()
+            guard lower.hasPrefix("metadata/"), lower.hasSuffix(".png") else { continue }
+            let basename = String(lower.split(separator: "/").last ?? "")
+            guard let (kind, idx) = Self.plateKindAndIndex(basename: basename) else { continue }
             guard entry.uncompressedSize <= UInt64(maxThumbnailSize) else { continue }
-            found.append((idx: parsePlateIndex(path: lower), path: path))
+            // Prefer the `plate_` render over `top_` for the same index; keep the first of a kind.
+            if let existing = byIndex[idx], existing.kind <= kind { continue }
+            byIndex[idx] = (kind, entry.path)
         }
 
-        // De-duplicate by path, then sort: indexed plates ascending by index, unindexed by path.
-        var seen = Set<String>()
-        var unique: [(idx: Int?, path: String)] = []
-        for entry in found where seen.insert(entry.path).inserted {
-            unique.append(entry)
+        return byIndex.keys.sorted().map { idx in
+            PlateThumbnail(path: byIndex[idx]!.path, index: idx)
         }
-        unique.sort { a, b in
-            switch (a.idx, b.idx) {
-            case let (l?, r?): l < r
-            case (_?, nil): true
-            case (nil, _?): false
-            case (nil, nil): a.path < b.path
-            }
-        }
-        return unique.map { PlateThumbnail(path: $0.path, index: $0.idx) }
     }
 
     /// Extracts the PNG bytes for a single plate. **Throws** if the archive can't be
@@ -219,16 +211,16 @@ public enum ThreeMFExtractor {
         return nil
     }
 
-    /// Returns the trailing integer after `plate_` or `top_` in the path, if any.
-    private static func parsePlateIndex(path: String) -> Int? {
-        for token in ["plate_", "top_"] {
-            guard let range = path.range(of: token) else { continue }
-            let tail = path[range.upperBound...]
-            var digits = ""
-            for ch in tail {
-                if ch.isNumber { digits.append(ch) } else { break }
-            }
-            if let n = Int(digits) { return n }
+    /// Classifies a lowercased `Metadata/` PNG basename as a canonical plate render.
+    /// Returns `(kind, index)` where kind 0 = `plate_<N>.png` (preferred), 1 = `top_<N>.png`.
+    /// Returns nil for per-plate variants (`plate_<N>_small.png`, `plate_no_light_<N>.png`,
+    /// `pick_<N>.png`, …) and non-plate PNGs — the exact-integer parse rejects any basename
+    /// with an extra suffix after the number, so each real plate is counted once.
+    static func plateKindAndIndex(basename: String) -> (kind: Int, index: Int)? {
+        for (prefix, kind) in [("plate_", 0), ("top_", 1)] {
+            guard basename.hasPrefix(prefix), basename.hasSuffix(".png") else { continue }
+            let mid = basename.dropFirst(prefix.count).dropLast(4) // strip prefix and ".png"
+            if let n = Int(mid) { return (kind, n) }
         }
         return nil
     }

@@ -34,7 +34,7 @@ enum CLI {
         Usage:
           threemf-cli info <file>
           threemf-cli validate <file>
-          threemf-cli thumbnail <input> <output.png> [--size N] [--cache]
+          threemf-cli thumbnail <input> <output.png> [--size N] [--cache] [--plate N]
           threemf-cli batch info <files...>
           threemf-cli batch validate <files...>
 
@@ -152,6 +152,14 @@ enum CLI {
         return Int(args[idx + 1])
     }
 
+    /// Parses optional `--plate N` (1-based) flag from argv. Returns nil if absent or invalid.
+    static func parsePlate(from args: [String]) -> Int? {
+        guard let idx = args.firstIndex(of: "--plate"), idx + 1 < args.count else {
+            return nil
+        }
+        return Int(args[idx + 1])
+    }
+
     // MARK: - Commands
 
     static func info(file: URL) throws {
@@ -222,17 +230,23 @@ enum CLI {
         }
     }
 
-    static func thumbnail(input: URL, output: URL, size: Int, useCache: Bool = false) throws {
+    static func thumbnail(input: URL, output: URL, size: Int, useCache: Bool = false, plate: Int? = nil) throws {
         try ensureExists(input)
 
-        // Cache hit: write the cached PNG directly.
-        if useCache, let cached = ThumbnailCache.cachedThumbnail(for: input) {
+        // Cache hit: write the cached PNG directly. (Skipped when a specific plate is
+        // requested — the cache is keyed by file only, not by plate.)
+        if useCache, plate == nil, let cached = ThumbnailCache.cachedThumbnail(for: input) {
             try cached.write(to: output, options: .atomic)
             return
         }
 
         let format = detectFormat(input)
-        let mesh = try loadMesh(from: input, format: format)
+        var mesh = try loadMesh(from: input, format: format)
+        // `--plate N` (1-based) renders only that plate of a multi-plate Bambu/Orca 3MF.
+        if let plate, !mesh.plates.isEmpty {
+            let idx = max(0, min(plate - 1, mesh.plates.count - 1))
+            mesh = mesh.submesh(plateIndex: idx)
+        }
         let scene = SceneBuilder.buildScene(from: mesh)
 
         let renderer = SCNRenderer(device: nil, options: nil)

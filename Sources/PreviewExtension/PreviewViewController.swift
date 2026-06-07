@@ -35,12 +35,13 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
     private var loadedToolpath: ToolpathData?
     private weak var scnView: ZoomSCNView?
     private weak var hudView: HUDOverlay?
-    private var hudUserToggled = false
-    private var hudFadeWorkItem: DispatchWorkItem?
     private weak var helpView: HelpOverlay?
     /// Embedded plate thumbnails (Bambu/Orca 3MFs). Empty for non-plate files.
     private var plates: [ThreeMFExtractor.PlateThumbnail] = []
     private var currentPlateIndex: Int = 0
+    /// Geometry-level plates for the active 3D scene (multi-plate Bambu/Orca 3MFs). Drives
+    /// plate switching in 3D mode, distinct from the PNG-thumbnail `plates` used pre-load.
+    private var meshPlates: [PlateInfo] = []
     private weak var plateImageView: NSImageView?
     private weak var plateLabel: NSTextField?
     /// Visible scene helpers (toggleable).
@@ -165,13 +166,15 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
         let hud = HUDOverlay()
         hud.translatesAutoresizingMaskIntoConstraints = false
         hud.update(toolpathStats: makeToolpathStats(for: toolpath))
+        hud.onClose = { [weak self] in self?.toggleHUD() }
         view.addSubview(hud)
         NSLayoutConstraint.activate([
             hud.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
             hud.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
         ])
         hudView = hud
-        scheduleHUDAutoFade()
+
+        addHelpBadge()
 
         // Layer scrubber pinned to the bottom for multi-layer toolpaths.
         if toolpath.layerCount > 1 {
@@ -330,7 +333,16 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
         if let image = firstImage {
             // Show thumbnail + "Show 3D" button. Already on main (QuickLook invokes us on main).
             showImage(image)
-            if plates.count > 1 { showPlateLabel() }
+            if plates.count > 1 {
+                showPlateLabel()
+                // Quick Look chrome usually owns first responder by the time we get here,
+                // so the root view's opportunistic claim in viewDidMoveToWindow doesn't fire.
+                // Force it now so the ← → arrow keys actually reach our keyDownHandler.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.view.window?.makeFirstResponder(self.view)
+                }
+            }
             showShow3DButton()
             handler(nil)
         } else {
@@ -355,28 +367,75 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
     // MARK: - Plate cycling
 
     private func showPlateLabel() {
+        let prev = makePlateChevron(symbol: "‹", action: #selector(plateChevronPrev))
+        let next = makePlateChevron(symbol: "›", action: #selector(plateChevronNext))
+
         let label = NSTextField(labelWithString: plateLabelText())
         label.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         label.textColor = .secondaryLabelColor
-        label.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(label)
+
+        let stack = NSStackView(views: [prev, label, next])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(stack)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
-            label.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
+            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
+            stack.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -10),
         ])
         plateLabel = label
     }
 
+    private func makePlateChevron(symbol: String, action: Selector) -> NSButton {
+        let button = NSButton()
+        button.title = symbol
+        button.isBordered = false
+        button.bezelStyle = .accessoryBarAction
+        button.font = .systemFont(ofSize: NSFont.systemFontSize + 1, weight: .medium)
+        button.contentTintColor = .secondaryLabelColor
+        button.target = self
+        button.action = action
+        button.setButtonType(.momentaryChange)
+        button.setContentHuggingPriority(.required, for: .horizontal)
+        return button
+    }
+
+    @objc private func plateChevronPrev() {
+        cyclePlate(-1)
+    }
+
+    @objc private func plateChevronNext() {
+        cyclePlate(+1)
+    }
+
     private func plateLabelText() -> String {
+        // 3D mode labels with the geometry plates (and their names); thumbnail mode counts PNGs.
+        if scnView != nil, meshPlates.count > 1 {
+            let base = String(
+                format: String(localized: "Plate %d / %d"),
+                currentPlateIndex + 1, meshPlates.count
+            )
+            let name = meshPlates[safe: currentPlateIndex]?.name ?? ""
+            return name.isEmpty ? base : "\(base) · \(name)"
+        }
         let n = plates.count
         let i = currentPlateIndex + 1
         return String(
-            format: String(localized: "Plate %d / %d  (← →)"),
+            format: String(localized: "Plate %d / %d"),
             i, n
         )
     }
 
     private func cyclePlate(_ direction: Int) {
+        // 3D mode: rebuild the scene for the newly-selected plate.
+        if scnView != nil, meshPlates.count > 1 {
+            currentPlateIndex = (currentPlateIndex + direction + meshPlates.count) % meshPlates.count
+            rebuildPlateScene()
+            plateLabel?.stringValue = plateLabelText()
+            return
+        }
+        // 2D thumbnail mode: swap the embedded plate PNG.
         guard plates.count > 1, let url = fileURL else { return }
         let next = (currentPlateIndex + direction + plates.count) % plates.count
         currentPlateIndex = next
@@ -460,7 +519,11 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
     private func show3DScene(from mesh: MeshData) {
         log.debug("show3DScene vertices=\(mesh.vertices.count) tris=\(mesh.indices.count / 3)")
         loadedMesh = mesh
-        let scene = SceneBuilder.buildScene(from: mesh)
+        meshPlates = mesh.plates
+        currentPlateIndex = 0
+        // Multi-plate Bambu/Orca files render one plate at a time (default: plate 1).
+        let displayMesh = meshPlates.count > 1 ? mesh.submesh(plateIndex: 0) : mesh
+        let scene = SceneBuilder.buildScene(from: displayMesh)
         let scnView = ZoomSCNView()
         scnView.scene = scene
         scnView.allowsCameraControl = true
@@ -481,10 +544,11 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
         ])
         self.scnView = scnView
 
-        // HUD overlay — shown on first scene-display, auto-fades after 3s if not toggled.
+        // HUD overlay — pinned (no auto-fade). Dismissable via `i`, `?` overlay, or its × button.
         let hud = HUDOverlay()
         hud.translatesAutoresizingMaskIntoConstraints = false
-        hud.update(stats: makeStats(for: mesh))
+        hud.update(stats: makeStats(for: displayMesh))
+        hud.onClose = { [weak self] in self?.toggleHUD() }
         view.addSubview(hud)
         NSLayoutConstraint.activate([
             hud.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
@@ -492,12 +556,34 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
         ])
         hudView = hud
 
-        scheduleHUDAutoFade()
+        addHelpBadge()
+
+        // Multi-plate file: show the plate label + chevrons so ← → cycling is discoverable.
+        if meshPlates.count > 1 {
+            showPlateLabel()
+        }
 
         // Make the SCNView first responder so it receives key events.
         DispatchQueue.main.async { [weak scnView] in
             scnView?.window?.makeFirstResponder(scnView)
         }
+    }
+
+    /// Rebuilds the active 3D scene to show `currentPlateIndex`'s geometry, reframing to it.
+    /// Used when cycling plates in 3D mode.
+    private func rebuildPlateScene() {
+        guard let mesh = loadedMesh, let scnView, meshPlates.count > 1 else { return }
+        let displayMesh = mesh.submesh(plateIndex: currentPlateIndex)
+        let scene = SceneBuilder.buildScene(from: displayMesh)
+        scnView.scene = scene
+        if let cam = scene.rootNode.childNode(withName: "camera", recursively: true) {
+            scnView.pointOfView = cam
+        }
+        // The scene was replaced — the optional axis/grid helpers are gone with it; clear the
+        // references so their toggle state stays consistent (treated as off until re-toggled).
+        axisGizmoNode = nil
+        bedGridNode = nil
+        hudView?.update(stats: makeStats(for: displayMesh))
     }
 
     private func showImage(_ image: NSImage) {
@@ -541,16 +627,6 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
         )
     }
 
-    private func scheduleHUDAutoFade() {
-        hudFadeWorkItem?.cancel()
-        let item = DispatchWorkItem { [weak self] in
-            guard let self, !self.hudUserToggled else { return }
-            self.fadeOutHUD()
-        }
-        hudFadeWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: item)
-    }
-
     private func fadeOutHUD() {
         guard let hud = hudView else { return }
         NSAnimationContext.runAnimationGroup { ctx in
@@ -571,8 +647,6 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
 
     private func toggleHUD() {
         guard let hud = hudView else { return }
-        hudUserToggled = true
-        hudFadeWorkItem?.cancel()
         if hud.alphaValue < 0.5 {
             fadeInHUD()
         } else {
@@ -670,6 +744,30 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
     }
 
     // MARK: - Toggleable scene helpers and help overlay
+
+    /// Circular "?" badge anchored top-right of the scene. Toggles the keyboard cheat sheet
+    /// for users who don't know the `?` shortcut.
+    private func addHelpBadge() {
+        let button = NSButton()
+        button.title = "?"
+        button.bezelStyle = .circular
+        button.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+        button.target = self
+        button.action = #selector(helpBadgeTapped)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.toolTip = String(localized: "Keyboard shortcuts")
+        view.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
+            button.topAnchor.constraint(equalTo: view.topAnchor, constant: 10),
+            button.widthAnchor.constraint(equalToConstant: 22),
+            button.heightAnchor.constraint(equalToConstant: 22),
+        ])
+    }
+
+    @objc private func helpBadgeTapped() {
+        toggleHelp()
+    }
 
     private func toggleHelp() {
         if let existing = helpView {

@@ -15,7 +15,7 @@ settings:
     CODE_SIGN_IDENTITY: "Apple Development"
     DEVELOPMENT_TEAM: DDZR8BZJYU
     CODE_SIGN_STYLE: Automatic
-    MARKETING_VERSION: "1.3.0"
+    MARKETING_VERSION: "1.4.0"
     CURRENT_PROJECT_VERSION: "1"
 
 packages:

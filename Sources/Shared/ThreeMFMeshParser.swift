@@ -79,6 +79,13 @@ public enum ThreeMFMeshParser {
         return data
     }
 
+    /// Reads an archive entry into memory if it exists, returning nil when absent or
+    /// unreadable. Used for the small Bambu/Orca `Metadata/*.config` side files.
+    private static func readEntryIfPresent(_ archive: Archive, path: String) -> Data? {
+        guard let entry = archive[path] else { return nil }
+        return try? extractCapped(archive, entry: entry, cap: maxModelSize)
+    }
+
     /// Fast path that extracts only `<metadata>` tags from the root model file.
     /// Skips component traversal, mesh assembly, and normal computation — useful for
     /// Spotlight indexing where we only need application/title/designer attributes.
@@ -146,6 +153,8 @@ public enum ThreeMFMeshParser {
 
         // Parse each external component file into its own mesh
         var objectMeshes = result.objectMeshes
+        // Per-object Bambu paint states (merged from component files below).
+        var objectPaintStates = result.objectPaintStates
 
         // Build set of object IDs actually needed by build items
         // to avoid extracting/parsing large files we won't use
@@ -198,17 +207,37 @@ public enum ThreeMFMeshParser {
                     }
                     if let firstMesh = compResult.objectMeshes.first {
                         objectMeshes[comp.objectId] = firstMesh.value
+                        // Carry the component's paint states under the referencing object id.
+                        if let paint = compResult.objectPaintStates[firstMesh.key] {
+                            objectPaintStates[comp.objectId] = paint
+                        }
                     }
                 }
             }
         }
 
+        // Bambu/Orca color + plate layout lives outside the model XML, in the Metadata
+        // config files. Tolerant: absent or malformed → empty config, no effect.
+        let bambuConfig = BambuModelConfig.parse(
+            modelSettings: readEntryIfPresent(archive, path: "Metadata/model_settings.config"),
+            projectSettings: readEntryIfPresent(archive, path: "Metadata/project_settings.config")
+        )
+        let bambuColor = bambuConfig.hasColorAssignment
+        let bambuHasPlates = !bambuConfig.objectPlateIndex.isEmpty
+        let bambuObjMaterial = bambuConfig.objectMaterialIndex
+        let bambuObjPlate = bambuConfig.objectPlateIndex
+        let bambuPaletteCount = bambuConfig.filamentColours.count
+
         // Assemble: use build items (with transforms) if available,
         // otherwise just merge all meshes (sorted by id for determinism)
         var allVertices: [simd_float3] = []
         var allIndices: [UInt32] = []
-        let allMaterials: [BaseMaterial] = result.materials
+        // Bambu files assign color per object (extruder → filament palette) rather than via
+        // core-spec <basematerials>; prefer that palette when present.
+        let allMaterials: [BaseMaterial] = bambuColor ? bambuConfig.materials() : result.materials
         var allTriangleMats: [Int] = []
+        // Per-triangle plate index, populated only for multi-plate Bambu/Orca files.
+        var allTrianglePlates: [Int] = []
 
         /// Aggregate caps to bound memory.
         func canAppend(verts: Int, tris: Int) -> Bool {
@@ -250,11 +279,41 @@ public enum ThreeMFMeshParser {
                 for idx in mesh.indices {
                     allIndices.append(idx + baseOffset)
                 }
-                if !mesh.triangleMaterials.isEmpty {
+                let triCountThisItem = mesh.indices.count / 3
+                // Color: Bambu assigns one material per object (via extruder); otherwise
+                // fall back to the mesh's own core-spec per-triangle materials.
+                if bambuColor {
+                    // Base color = object's extruder; per-triangle paint overrides it.
+                    let baseMatIdx = bambuObjMaterial[item.objectId] ?? -1
+                    if allTriangleMats.count < triBase {
+                        allTriangleMats.append(contentsOf: repeatElement(-1, count: triBase - allTriangleMats.count))
+                    }
+                    let paint = objectPaintStates[meshObjId]
+                    if let paint, paint.count == triCountThisItem {
+                        for state in paint {
+                            // state is a 1-based extruder; palette index = state - 1.
+                            if state >= 1, state - 1 < bambuPaletteCount {
+                                allTriangleMats.append(state - 1)
+                            } else {
+                                allTriangleMats.append(baseMatIdx)
+                            }
+                        }
+                    } else {
+                        allTriangleMats.append(contentsOf: repeatElement(baseMatIdx, count: triCountThisItem))
+                    }
+                } else if !mesh.triangleMaterials.isEmpty {
                     if allTriangleMats.count < triBase {
                         allTriangleMats.append(contentsOf: repeatElement(-1, count: triBase - allTriangleMats.count))
                     }
                     allTriangleMats.append(contentsOf: mesh.triangleMaterials)
+                }
+                // Plate membership (independent of color) so the preview can show one plate.
+                if bambuHasPlates {
+                    let plateIdx = bambuObjPlate[item.objectId] ?? -1
+                    if allTrianglePlates.count < triBase {
+                        allTrianglePlates.append(contentsOf: repeatElement(-1, count: triBase - allTrianglePlates.count))
+                    }
+                    allTrianglePlates.append(contentsOf: repeatElement(plateIdx, count: triCountThisItem))
                 }
             }
         } else {
@@ -281,20 +340,24 @@ public enum ThreeMFMeshParser {
             throw ThreeMFMeshParserError.noMeshData
         }
 
-        // Pad triangleMaterials trailing tail with -1 so length matches triangle count.
-        if !allTriangleMats.isEmpty {
-            let target = allIndices.count / 3
-            if allTriangleMats.count < target {
-                allTriangleMats.append(contentsOf: repeatElement(-1, count: target - allTriangleMats.count))
-            }
+        // Pad trailing tails with -1 so per-triangle arrays match the triangle count.
+        let triTarget = allIndices.count / 3
+        if !allTriangleMats.isEmpty, allTriangleMats.count < triTarget {
+            allTriangleMats.append(contentsOf: repeatElement(-1, count: triTarget - allTriangleMats.count))
+        }
+        if !allTrianglePlates.isEmpty, allTrianglePlates.count < triTarget {
+            allTrianglePlates.append(contentsOf: repeatElement(-1, count: triTarget - allTrianglePlates.count))
         }
 
         // Filter out triangles with out-of-range indices before SceneKit sees them.
+        // Per-triangle material and plate arrays are filtered in lockstep.
         let vCount = UInt32(allVertices.count)
         var filteredIndices: [UInt32] = []
         filteredIndices.reserveCapacity(allIndices.count)
         var filteredMats: [Int] = []
         filteredMats.reserveCapacity(allTriangleMats.count)
+        var filteredPlates: [Int] = []
+        filteredPlates.reserveCapacity(allTrianglePlates.count)
         var t = 0
         while t * 3 + 2 < allIndices.count {
             let a = allIndices[t * 3], b = allIndices[t * 3 + 1], c = allIndices[t * 3 + 2]
@@ -304,6 +367,9 @@ public enum ThreeMFMeshParser {
                 filteredIndices.append(c)
                 if !allTriangleMats.isEmpty, t < allTriangleMats.count {
                     filteredMats.append(allTriangleMats[t])
+                }
+                if !allTrianglePlates.isEmpty, t < allTrianglePlates.count {
+                    filteredPlates.append(allTrianglePlates[t])
                 }
             }
             t += 1
@@ -317,6 +383,8 @@ public enum ThreeMFMeshParser {
         var mesh = MeshData(vertices: allVertices, indices: filteredIndices, normals: nil)
         mesh.materials = allMaterials
         mesh.triangleMaterials = filteredMats
+        mesh.trianglePlates = filteredPlates
+        mesh.plates = bambuConfig.plates.map { PlateInfo(id: $0.id, name: $0.name) }
         mesh.metadata = result.metadata.isEmpty ? nil : result.metadata
         mesh.computeNormals { normalFraction in
             // 80–100%: normal computation progress
@@ -460,6 +528,9 @@ enum FastMeshScanner {
         var materials: [BaseMaterial]
         /// Standard 3MF `<metadata>` tags from the root model file.
         var metadata: ThreeMFMetadata
+        /// Per-object decoded Bambu/Orca `paint_color` states, parallel to that object's
+        /// triangles (1-based extruder, `0` = unpainted/base). Empty for objects with no paint.
+        var objectPaintStates: [String: [Int]]
     }
 
     static func scan(_ data: Data, progress: ((Float) -> Void)? = nil) -> ScanResult {
@@ -470,7 +541,8 @@ enum FastMeshScanner {
                     components: [],
                     buildItems: [],
                     materials: [],
-                    metadata: ThreeMFMetadata()
+                    metadata: ThreeMFMetadata(),
+                    objectPaintStates: [:]
                 )
             }
             let count = rawBuffer.count
@@ -504,6 +576,11 @@ private struct ByteScanner {
     private var currentTriMaterials: [Int] = []
     private var hasAnyMaterial = false
     private var inMesh = false
+
+    /// Per-object Bambu `paint_color` states (parallel to triangles; 0 = unpainted).
+    var objectPaintStates: [String: [Int]] = [:]
+    private var currentPaintStates: [Int] = []
+    private var hasAnyPaint = false
 
     init(base: UnsafePointer<UInt8>, count: Int) {
         self.base = base
@@ -563,10 +640,13 @@ private struct ByteScanner {
                             indices: currentIndices,
                             triangleMaterials: mats
                         )
+                        if hasAnyPaint { objectPaintStates[objId] = currentPaintStates }
                     }
                     currentObjectId = nil
                     hasAnyMaterial = false
                     currentTriMaterials = []
+                    hasAnyPaint = false
+                    currentPaintStates = []
                 } else if tagLen >= 13, matchesAt(tagStart, "basematerials") {
                     if let gid = currentMatGroupId {
                         materialGroups[gid] = currentMatGroupStart ..< materials.count
@@ -615,7 +695,8 @@ private struct ByteScanner {
             components: components,
             buildItems: buildItems,
             materials: materials,
-            metadata: metadata
+            metadata: metadata,
+            objectPaintStates: objectPaintStates
         )
     }
 
@@ -730,6 +811,7 @@ private struct ByteScanner {
         var gotV1 = false, gotV2 = false, gotV3 = false
         var pid: String?
         var p1Idx: Int?
+        var paintHex: String?
 
         while pos < count, base[pos] != ByteScanner.gt {
             skipWhitespace()
@@ -779,6 +861,9 @@ private struct ByteScanner {
                 {
                     pid = stringFromBytes(valStart, valEnd)
                 }
+            } else if attrLen == 11, matchesCaseInsensitiveAt(attrStart, "paint_color") {
+                // Bambu/Orca per-triangle MMU paint.
+                paintHex = stringFromBytes(valStart, valEnd)
             }
         }
         skipToTagEnd()
@@ -800,6 +885,14 @@ private struct ByteScanner {
             } else {
                 currentTriMaterials.append(-1)
             }
+            // Per-triangle Bambu paint state (0 = unpainted → object's base extruder).
+            if let paintHex {
+                let state = BambuModelConfig.decodePaintColor(paintHex)
+                currentPaintStates.append(state)
+                if state >= 1 { hasAnyPaint = true }
+            } else {
+                currentPaintStates.append(0)
+            }
         }
     }
 
@@ -809,6 +902,8 @@ private struct ByteScanner {
         currentIndices = []
         currentTriMaterials = []
         hasAnyMaterial = false
+        currentPaintStates = []
+        hasAnyPaint = false
         skipToTagEnd()
     }
 

@@ -38,6 +38,12 @@
         "en" : { "stringUnit" : { "state" : "translated", "value" : "File" } }
       }
     },
+    "Hide info" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Hide info" } }
+      }
+    },
     "Keyboard shortcuts" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -50,10 +56,10 @@
         "en" : { "stringUnit" : { "state" : "translated", "value" : "Loading 3D… %d%%" } }
       }
     },
-    "Plate %d / %d  (← →)" : {
+    "Plate %d / %d" : {
       "extractionState" : "manual",
       "localizations" : {
-        "en" : { "stringUnit" : { "state" : "translated", "value" : "Plate %d / %d  (← →)" } }
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Plate %d / %d" } }
       }
     },
     "Show 3D" : {

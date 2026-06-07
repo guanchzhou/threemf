@@ -37,7 +37,8 @@ do {
             input: URL(fileURLWithPath: cliArgs[2]),
             output: URL(fileURLWithPath: cliArgs[3]),
             size: size,
-            useCache: useCache
+            useCache: useCache,
+            plate: CLI.parsePlate(from: cliArgs)
         )
     case "batch":
         guard cliArgs.count >= 4 else {

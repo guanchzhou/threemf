@@ -16,6 +16,20 @@ public struct BaseMaterial: Sendable, Hashable {
     }
 }
 
+/// One print plate in a Bambu/Orca multi-plate 3MF, surfaced so the preview can render
+/// and label plates individually. Derived from `Metadata/model_settings.config`.
+public struct PlateInfo: Sendable, Hashable {
+    /// 1-based plate id (`plater_id`).
+    public let id: Int
+    /// Human label (`plater_name`), e.g. "Body and Head". May be empty.
+    public let name: String
+
+    public init(id: Int, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
 /// Axis-aligned bounding box of a mesh in its source coordinate space (3D-print conventions: mm).
 public struct BoundingBox: Sendable, Hashable {
     public let min: simd_float3
@@ -74,6 +88,11 @@ public struct MeshData {
     public var materials: [BaseMaterial] = []
     /// Length is `indices.count / 3`. Index into `materials`. `-1` = default material.
     public var triangleMaterials: [Int] = []
+    /// Per-triangle plate index into `plates` (0-based). `-1` = unassigned / single-plate.
+    /// When non-empty, length is `indices.count / 3`. Lets the preview render one plate at a time.
+    public var trianglePlates: [Int] = []
+    /// Print plates in display order. Empty or single-element ⇒ no plate switching.
+    public var plates: [PlateInfo] = []
     /// Optional 3MF metadata. `nil` for STL or 3MF files with no `<metadata>` tags.
     public var metadata: ThreeMFMetadata?
 
@@ -83,6 +102,8 @@ public struct MeshData {
         normals: [simd_float3]? = nil,
         materials: [BaseMaterial] = [],
         triangleMaterials: [Int] = [],
+        trianglePlates: [Int] = [],
+        plates: [PlateInfo] = [],
         metadata: ThreeMFMetadata? = nil
     ) {
         self.vertices = vertices
@@ -90,6 +111,8 @@ public struct MeshData {
         self.normals = normals
         self.materials = materials
         self.triangleMaterials = triangleMaterials
+        self.trianglePlates = trianglePlates
+        self.plates = plates
         self.metadata = metadata
     }
 
@@ -152,6 +175,57 @@ public struct MeshData {
             hi = simd_max(hi, v)
         }
         return BoundingBox(min: lo, max: hi)
+    }
+
+    /// Extracts the triangles belonging to a single plate (by `trianglePlates` index) into
+    /// a standalone mesh with compacted, re-indexed vertices and normals. Materials are
+    /// preserved (indices still valid); `plates` is carried over for labeling.
+    ///
+    /// Returns `self` unchanged when there's no plate tagging. The compaction matters for
+    /// framing: SceneKit derives the model's bounding box from the vertex buffer, so unused
+    /// vertices from other plates would otherwise inflate it and shrink the view.
+    public func submesh(plateIndex: Int) -> MeshData {
+        guard !trianglePlates.isEmpty else { return self }
+        let triCount = indices.count / 3
+        let hasNormals = (normals?.isEmpty == false)
+        let hasMats = !triangleMaterials.isEmpty
+
+        var remap = [UInt32: UInt32](minimumCapacity: vertices.count)
+        var newVertices: [simd_float3] = []
+        var newNormals: [simd_float3] = []
+        var newIndices: [UInt32] = []
+        var newTriMats: [Int] = []
+
+        for t in 0 ..< triCount where t < trianglePlates.count && trianglePlates[t] == plateIndex {
+            for k in 0 ..< 3 {
+                let old = indices[t * 3 + k]
+                let mapped: UInt32
+                if let existing = remap[old] {
+                    mapped = existing
+                } else {
+                    guard Int(old) < vertices.count else { continue }
+                    mapped = UInt32(newVertices.count)
+                    remap[old] = mapped
+                    newVertices.append(vertices[Int(old)])
+                    if hasNormals, Int(old) < normals!.count {
+                        newNormals.append(normals![Int(old)])
+                    }
+                }
+                newIndices.append(mapped)
+            }
+            if hasMats, t < triangleMaterials.count { newTriMats.append(triangleMaterials[t]) }
+        }
+
+        var sub = MeshData(
+            vertices: newVertices,
+            indices: newIndices,
+            normals: (hasNormals && newNormals.count == newVertices.count) ? newNormals : nil
+        )
+        sub.materials = materials
+        sub.triangleMaterials = newTriMats
+        sub.plates = plates
+        sub.metadata = metadata
+        return sub
     }
 
     /// Computes per-vertex normals by accumulating face normals.
