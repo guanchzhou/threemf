@@ -31,7 +31,7 @@ do {
             CLI.printUsage()
             exit(2)
         }
-        let size = CLI.parseSize(from: cliArgs) ?? 512
+        let size = try CLI.resolveSize(from: cliArgs)
         let useCache = cliArgs.contains("--cache")
         try CLI.thumbnail(
             input: URL(fileURLWithPath: cliArgs[2]),

@@ -247,73 +247,82 @@ public enum ThreeMFMeshParser {
 
         if !result.buildItems.isEmpty {
             for item in result.buildItems {
-                let meshObjId = resolveObjectMesh(
+                // Flatten the item's object into concrete sub-meshes, each with its fully
+                // composed transform (build-item ∘ nested component transforms). The common
+                // Bambu/Orca case (object has its own mesh, no components) yields exactly one
+                // emission at `item.transform`, so this is behavior-preserving there.
+                let emissions = expandObject(
                     objectId: item.objectId,
+                    transform: item.transform,
                     components: result.components,
-                    objectMeshes: objectMeshes
+                    objectMeshes: objectMeshes,
+                    depth: 0,
+                    visiting: []
                 )
-                guard let mesh = objectMeshes[meshObjId] else { continue }
-                guard canAppend(verts: mesh.vertices.count, tris: mesh.indices.count / 3) else {
-                    log.error("Skipping object \(meshObjId, privacy: .public) — would exceed aggregate caps")
-                    continue
-                }
-
-                let baseOffset = UInt32(allVertices.count)
-                let transform = item.transform
-
-                if transform == [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] {
-                    // Identity transform — skip per-vertex math
-                    allVertices.append(contentsOf: mesh.vertices)
-                } else {
-                    allVertices.reserveCapacity(allVertices.count + mesh.vertices.count)
-                    let m = transform
-                    for v in mesh.vertices {
-                        let x = (m[0] * v.x) + (m[3] * v.y) + (m[6] * v.z) + m[9]
-                        let y = (m[1] * v.x) + (m[4] * v.y) + (m[7] * v.z) + m[10]
-                        let z = (m[2] * v.x) + (m[5] * v.y) + (m[8] * v.z) + m[11]
-                        allVertices.append(simd_float3(x, y, z))
+                for emission in emissions {
+                    guard let mesh = objectMeshes[emission.meshObjectId] else { continue }
+                    guard canAppend(verts: mesh.vertices.count, tris: mesh.indices.count / 3) else {
+                        log.error("Skipping object \(emission.meshObjectId, privacy: .public) — would exceed aggregate caps")
+                        continue
                     }
-                }
-                allIndices.reserveCapacity(allIndices.count + mesh.indices.count)
-                let triBase = allIndices.count / 3
-                for idx in mesh.indices {
-                    allIndices.append(idx + baseOffset)
-                }
-                let triCountThisItem = mesh.indices.count / 3
-                // Color: Bambu assigns one material per object (via extruder); otherwise
-                // fall back to the mesh's own core-spec per-triangle materials.
-                if bambuColor {
-                    // Base color = object's extruder; per-triangle paint overrides it.
-                    let baseMatIdx = bambuObjMaterial[item.objectId] ?? -1
-                    if allTriangleMats.count < triBase {
-                        allTriangleMats.append(contentsOf: repeatElement(-1, count: triBase - allTriangleMats.count))
-                    }
-                    let paint = objectPaintStates[meshObjId]
-                    if let paint, paint.count == triCountThisItem {
-                        for state in paint {
-                            // state is a 1-based extruder; palette index = state - 1.
-                            if state >= 1, state - 1 < bambuPaletteCount {
-                                allTriangleMats.append(state - 1)
-                            } else {
-                                allTriangleMats.append(baseMatIdx)
-                            }
-                        }
+
+                    let baseOffset = UInt32(allVertices.count)
+                    let transform = emission.transform
+
+                    if transform == [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0] {
+                        // Identity transform — skip per-vertex math
+                        allVertices.append(contentsOf: mesh.vertices)
                     } else {
-                        allTriangleMats.append(contentsOf: repeatElement(baseMatIdx, count: triCountThisItem))
+                        allVertices.reserveCapacity(allVertices.count + mesh.vertices.count)
+                        let m = transform
+                        for v in mesh.vertices {
+                            let x = (m[0] * v.x) + (m[3] * v.y) + (m[6] * v.z) + m[9]
+                            let y = (m[1] * v.x) + (m[4] * v.y) + (m[7] * v.z) + m[10]
+                            let z = (m[2] * v.x) + (m[5] * v.y) + (m[8] * v.z) + m[11]
+                            allVertices.append(simd_float3(x, y, z))
+                        }
                     }
-                } else if !mesh.triangleMaterials.isEmpty {
-                    if allTriangleMats.count < triBase {
-                        allTriangleMats.append(contentsOf: repeatElement(-1, count: triBase - allTriangleMats.count))
+                    allIndices.reserveCapacity(allIndices.count + mesh.indices.count)
+                    let triBase = allIndices.count / 3
+                    for idx in mesh.indices {
+                        allIndices.append(idx + baseOffset)
                     }
-                    allTriangleMats.append(contentsOf: mesh.triangleMaterials)
-                }
-                // Plate membership (independent of color) so the preview can show one plate.
-                if bambuHasPlates {
-                    let plateIdx = bambuObjPlate[item.objectId] ?? -1
-                    if allTrianglePlates.count < triBase {
-                        allTrianglePlates.append(contentsOf: repeatElement(-1, count: triBase - allTrianglePlates.count))
+                    let triCountThisItem = mesh.indices.count / 3
+                    // Color: Bambu assigns one material per object (via extruder); otherwise
+                    // fall back to the mesh's own core-spec per-triangle materials.
+                    if bambuColor {
+                        // Base color = object's extruder; per-triangle paint overrides it.
+                        let baseMatIdx = bambuObjMaterial[item.objectId] ?? -1
+                        if allTriangleMats.count < triBase {
+                            allTriangleMats.append(contentsOf: repeatElement(-1, count: triBase - allTriangleMats.count))
+                        }
+                        let paint = objectPaintStates[emission.meshObjectId]
+                        if let paint, paint.count == triCountThisItem {
+                            for state in paint {
+                                // state is a 1-based extruder; palette index = state - 1.
+                                if state >= 1, state - 1 < bambuPaletteCount {
+                                    allTriangleMats.append(state - 1)
+                                } else {
+                                    allTriangleMats.append(baseMatIdx)
+                                }
+                            }
+                        } else {
+                            allTriangleMats.append(contentsOf: repeatElement(baseMatIdx, count: triCountThisItem))
+                        }
+                    } else if !mesh.triangleMaterials.isEmpty {
+                        if allTriangleMats.count < triBase {
+                            allTriangleMats.append(contentsOf: repeatElement(-1, count: triBase - allTriangleMats.count))
+                        }
+                        allTriangleMats.append(contentsOf: mesh.triangleMaterials)
                     }
-                    allTrianglePlates.append(contentsOf: repeatElement(plateIdx, count: triCountThisItem))
+                    // Plate membership (independent of color) so the preview can show one plate.
+                    if bambuHasPlates {
+                        let plateIdx = bambuObjPlate[item.objectId] ?? -1
+                        if allTrianglePlates.count < triBase {
+                            allTrianglePlates.append(contentsOf: repeatElement(-1, count: triBase - allTrianglePlates.count))
+                        }
+                        allTrianglePlates.append(contentsOf: repeatElement(plateIdx, count: triCountThisItem))
+                    }
                 }
             }
         } else {
@@ -401,6 +410,9 @@ public enum ThreeMFMeshParser {
         let parser = XMLParser(data: xmlData)
         parser.delegate = delegate
         parser.shouldProcessNamespaces = false
+        // Defense-in-depth: never fetch external DTDs/entities. This matches Foundation's
+        // default, but we set it explicitly so the XXE-off posture survives future refactors.
+        parser.shouldResolveExternalEntities = false
         guard parser.parse() else { return nil }
         // Filter out-of-range indices so SceneKit never sees a bad triangle.
         let vCount = UInt32(delegate.vertices.count)
@@ -422,20 +434,65 @@ public enum ThreeMFMeshParser {
         return (delegate.vertices, safeIndices)
     }
 
-    private static func resolveObjectMesh(
+    /// Max component-nesting depth. 3MF assemblies are shallow in practice; the cap also
+    /// bounds recursion on a malformed/circular file (belt-and-suspenders with the cycle set).
+    private static let maxComponentDepth = 16
+
+    /// Flattens an object into the list of `(meshObjectId, transform)` to emit, resolving
+    /// `<component>` references recursively and composing their transforms. An object may
+    /// contribute its own mesh *and* components. Each component's transform maps the child
+    /// into this object's coordinate space, so it composes child-first with the inherited
+    /// transform. Depth-bounded and cycle-guarded so a circular reference can't recurse
+    /// without end. Replaces the old single-id resolver, which dropped every component
+    /// transform and rendered only the first sub-mesh.
+    private static func expandObject(
         objectId: String,
+        transform: [Float],
         components: [ComponentRef],
-        objectMeshes: [String: (vertices: [simd_float3], indices: [UInt32], triangleMaterials: [Int])]
-    ) -> String {
+        objectMeshes: [String: (vertices: [simd_float3], indices: [UInt32], triangleMaterials: [Int])],
+        depth: Int,
+        visiting: Set<String>
+    ) -> [(meshObjectId: String, transform: [Float])] {
+        guard depth < maxComponentDepth, !visiting.contains(objectId) else { return [] }
+        var out: [(meshObjectId: String, transform: [Float])] = []
+
+        // The object's own mesh (if any) is emitted at the inherited transform.
         if objectMeshes[objectId] != nil {
-            return objectId
+            out.append((objectId, transform))
         }
-        for comp in components {
-            if comp.parentObjectId == objectId, objectMeshes[comp.objectId] != nil {
-                return comp.objectId
+
+        var childVisiting = visiting
+        childVisiting.insert(objectId)
+        for comp in components where comp.parentObjectId == objectId {
+            let composed = composeTransforms(comp.transform, transform)
+            out.append(contentsOf: expandObject(
+                objectId: comp.objectId,
+                transform: composed,
+                components: components,
+                objectMeshes: objectMeshes,
+                depth: depth + 1,
+                visiting: childVisiting
+            ))
+        }
+        return out
+    }
+
+    /// Composes two 3MF transforms (12-float, 4×3, row-vector convention) so that applying
+    /// the result equals applying `inner` then `outer`: `v · result == (v · inner) · outer`.
+    /// Each matrix's implicit last column is (0,0,0,1); row 3 is the translation.
+    static func composeTransforms(_ inner: [Float], _ outer: [Float]) -> [Float] {
+        func e(_ m: [Float], _ r: Int, _ c: Int) -> Float { m[r * 3 + c] }
+        var out = [Float](repeating: 0, count: 12)
+        for i in 0 ..< 4 {
+            for j in 0 ..< 3 {
+                var s = e(inner, i, 0) * e(outer, 0, j)
+                    + e(inner, i, 1) * e(outer, 1, j)
+                    + e(inner, i, 2) * e(outer, 2, j)
+                if i == 3 { s += e(outer, 3, j) } // inner's implicit w=1 carries outer's translation
+                out[i * 3 + j] = s
             }
         }
-        return objectId
+        return out
     }
 }
 
@@ -571,6 +628,10 @@ private struct ByteScanner {
     private var currentMatGroupStart: Int = 0
 
     private var currentObjectId: String?
+    /// Object-level default material (3MF core `pid`/`pindex`): triangles that carry no
+    /// material of their own inherit these. nil when the object sets no default.
+    private var currentObjectPid: String?
+    private var currentObjectPindex: Int?
     private var currentVertices: [simd_float3] = []
     private var currentIndices: [UInt32] = []
     private var currentTriMaterials: [Int] = []
@@ -873,10 +934,13 @@ private struct ByteScanner {
             currentIndices.append(v2)
             currentIndices.append(v3)
             // Resolve material: pid identifies a basematerials group, p1 is the entry within it.
-            // We map (pid, p1) to a global material index. Default to 0 when unspecified.
-            if let pid, let p1 = p1Idx, let range = materialGroups[pid] {
-                let gIdx = range.lowerBound + p1
-                if gIdx < range.upperBound {
+            // A triangle without its own pid/p1 inherits the object's default (pid/pindex),
+            // per 3MF core spec — the common shape for single-color objects.
+            let effectivePid = pid ?? currentObjectPid
+            let effectiveP1 = p1Idx ?? currentObjectPindex
+            if let effectivePid, let effectiveP1, let range = materialGroups[effectivePid] {
+                let gIdx = range.lowerBound + effectiveP1
+                if gIdx >= range.lowerBound, gIdx < range.upperBound {
                     currentTriMaterials.append(gIdx)
                     hasAnyMaterial = true
                 } else {
@@ -897,7 +961,11 @@ private struct ByteScanner {
     }
 
     private mutating func parseObject() {
-        currentObjectId = readStringAttribute("id")
+        let attrs = readAttributes(["id", "pid", "pindex"])
+        currentObjectId = attrs["id"]
+        // Object-level default material — inherited by triangles lacking their own pid/p1.
+        currentObjectPid = attrs["pid"]
+        currentObjectPindex = attrs["pindex"].flatMap { Int($0) }
         currentVertices = []
         currentIndices = []
         currentTriMaterials = []

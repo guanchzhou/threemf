@@ -9,15 +9,22 @@ import simd
 enum CLIError: Error, LocalizedError {
     case unsupportedFormat(String)
     case fileNotFound(String)
+    case invalidSize(String)
+    case batchValidationFailed
     case thumbnailEncodingFailed
     case rendererCreationFailed
 
     var errorDescription: String? {
         switch self {
         case let .unsupportedFormat(ext):
-            "Unsupported file format: .\(ext) (expected .3mf or .stl)"
+            // Empty ext prints as "." — name it so the message stays legible.
+            "Unsupported file format: \(ext.isEmpty ? "(no extension)" : ".\(ext)") (expected .3mf, .stl, or .gcode)"
         case let .fileNotFound(path):
             "File not found: \(path)"
+        case let .invalidSize(detail):
+            "Invalid --size value: \(detail)"
+        case .batchValidationFailed:
+            "One or more files failed validation"
         case .thumbnailEncodingFailed:
             "Failed to encode thumbnail PNG"
         case .rendererCreationFailed:
@@ -29,7 +36,7 @@ enum CLIError: Error, LocalizedError {
 enum CLI {
     static func printUsage() {
         let usage = """
-        threemf-cli — headless thumbnail/info for .3mf and .stl files
+        threemf-cli — headless thumbnail/info for .3mf, .stl, and .gcode files
 
         Usage:
           threemf-cli info <file>
@@ -48,8 +55,12 @@ enum CLI {
                       and PASS/FAIL lines for 'validate'.
 
         Flags:
+          --size N    For 'thumbnail': output edge length in pixels (1…4096, default 512).
+          --plate N   For 'thumbnail': render only plate N (1-based) of a multi-plate 3MF.
           --cache     For 'thumbnail': read/write the shared ThumbnailCache so
                       repeated invocations reuse a previously rendered PNG.
+
+        Exit codes: 0 success · 1 runtime error (missing/corrupt/unsupported file) · 2 usage.
         """
         FileHandle.standardError.write(Data("\(usage)\n".utf8))
     }
@@ -78,14 +89,14 @@ enum CLI {
             }
         }
         if anyFailed {
-            throw CLIError.fileNotFound("one or more files failed validation")
+            throw CLIError.batchValidationFailed
         }
     }
 
     private static func infoLine(for file: URL) async -> String? {
         do {
             try ensureExists(file)
-            let format = detectFormat(file)
+            let format = try resolveFormat(file)
             let payload = try buildInfoPayload(file: file, format: format)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
@@ -99,7 +110,7 @@ enum CLI {
     private static func validateLine(for file: URL) async -> String? {
         do {
             try ensureExists(file)
-            let format = detectFormat(file)
+            let format = try resolveFormat(file)
             switch format {
             case .gcode: _ = try GCodeParser.parse(from: file)
             case .threemf, .stl: _ = try loadMesh(from: file, format: format)
@@ -114,7 +125,7 @@ enum CLI {
     /// are well-formed before farming them out to slicers.
     static func validate(file: URL) throws {
         try ensureExists(file)
-        let format = detectFormat(file)
+        let format = try resolveFormat(file)
         do {
             let payload: String
             switch format {
@@ -144,12 +155,20 @@ enum CLI {
         }
     }
 
-    /// Parses optional `--size N` flag from argv. Returns nil if absent or invalid.
-    static func parseSize(from args: [String]) -> Int? {
-        guard let idx = args.firstIndex(of: "--size"), idx + 1 < args.count else {
-            return nil
+    /// Resolves the `--size N` flag. Absent → default 512. Present but non-numeric,
+    /// non-positive, or above `maxThumbnailSize` → throws, so a typo like `--size 0` or
+    /// `--size huge` fails loudly instead of silently rendering the default (or a 0×0 image).
+    static func resolveSize(from args: [String]) throws -> Int {
+        guard let idx = args.firstIndex(of: "--size") else { return 512 }
+        guard idx + 1 < args.count else { throw CLIError.invalidSize("(missing value)") }
+        let raw = args[idx + 1]
+        guard let n = Int(raw) else {
+            throw CLIError.invalidSize("\(raw) (expected an integer 1...\(maxThumbnailSize))")
         }
-        return Int(args[idx + 1])
+        guard n > 0, n <= maxThumbnailSize else {
+            throw CLIError.invalidSize("\(n) (expected 1...\(maxThumbnailSize))")
+        }
+        return n
     }
 
     /// Parses optional `--plate N` (1-based) flag from argv. Returns nil if absent or invalid.
@@ -164,7 +183,7 @@ enum CLI {
 
     static func info(file: URL) throws {
         try ensureExists(file)
-        let format = detectFormat(file)
+        let format = try resolveFormat(file)
         let payload = try buildInfoPayload(file: file, format: format)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -240,7 +259,7 @@ enum CLI {
             return
         }
 
-        let format = detectFormat(input)
+        let format = try resolveFormat(input)
         var mesh = try loadMesh(from: input, format: format)
         // `--plate N` (1-based) renders only that plate of a multi-plate Bambu/Orca 3MF.
         if let plate, !mesh.plates.isEmpty {
@@ -280,11 +299,20 @@ enum CLI {
         case gcode
     }
 
-    static func detectFormat(_ url: URL) -> FileFormat {
+    /// Largest thumbnail edge we'll render. Above this the snapshot allocation is huge
+    /// (size² × 4 bytes × MSAA) for no practical gain; reject with a clear message instead.
+    static let maxThumbnailSize = 4096
+
+    /// Resolves the file format from its extension, throwing a clear error for anything we
+    /// don't handle. Extensionless files default to `.3mf` (archives are sometimes exported
+    /// without a suffix); any *other* unknown extension is rejected explicitly, so the user
+    /// sees "unsupported format" rather than a misleading downstream 3MF/ZIP parse error.
+    static func resolveFormat(_ url: URL) throws -> FileFormat {
         switch url.pathExtension.lowercased() {
-        case "stl": .stl
-        case "gcode": .gcode
-        default: .threemf
+        case "stl": return .stl
+        case "gcode": return .gcode
+        case "3mf", "": return .threemf
+        case let other: throw CLIError.unsupportedFormat(other)
         }
     }
 

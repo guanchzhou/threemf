@@ -168,12 +168,20 @@ public enum GCodeParser {
         guard !segments.isEmpty else {
             throw GCodeParserError.noSegments
         }
+        // Sanitize the ETA before it leaves the parser. Crafted coords (Inf via a `1e999`
+        // token, or huge-finite via `1e30`) drive this non-finite or absurdly large; a
+        // downstream `Int(estimatedSeconds)` (HUD ETA, CLI) would then trap and crash the
+        // preview. Clamp to [0, 100 years] — anything beyond that is meaningless and
+        // keeps every consumer's Int cast in range. Root-cause fix, protects all callers.
+        let safeSeconds = estimatedSeconds.isFinite
+            ? min(max(estimatedSeconds, 0), 3_153_600_000) // 100 * 365.25 * 24 * 3600
+            : 0
         return ToolpathData(
             segments: segments,
             layerCount: layerIndex + 1,
             totalExtrudedMM: totalExtrudedMM,
             totalTravelMM: totalTravelMM,
-            estimatedSeconds: estimatedSeconds
+            estimatedSeconds: safeSeconds
         )
     }
 

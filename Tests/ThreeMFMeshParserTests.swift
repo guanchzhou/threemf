@@ -77,6 +77,147 @@ class ThreeMFMeshParserTests: XCTestCase {
         XCTAssertEqual(v0.y, 200.0, accuracy: 0.01)
     }
 
+    func testParse3MF_componentTransforms_composedAndAllEmitted() throws {
+        // Object 3 is an assembly: two components referencing objects 1 and 2, each with
+        // its own translation. A correct renderer emits BOTH sub-meshes at their translated
+        // positions. Regression for: (A) component transform ignored, (B) only first
+        // component rendered.
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+          <resources>
+            <object id="1" type="model">
+              <mesh>
+                <vertices>
+                  <vertex x="0" y="0" z="0" /><vertex x="1" y="0" z="0" /><vertex x="0" y="1" z="0" />
+                </vertices>
+                <triangles><triangle v1="0" v2="1" v3="2" /></triangles>
+              </mesh>
+            </object>
+            <object id="2" type="model">
+              <mesh>
+                <vertices>
+                  <vertex x="0" y="0" z="0" /><vertex x="1" y="0" z="0" /><vertex x="0" y="1" z="0" />
+                </vertices>
+                <triangles><triangle v1="0" v2="1" v3="2" /></triangles>
+              </mesh>
+            </object>
+            <object id="3" type="model">
+              <components>
+                <component objectid="1" transform="1 0 0 0 1 0 0 0 1 100 0 0" />
+                <component objectid="2" transform="1 0 0 0 1 0 0 0 1 0 100 0" />
+              </components>
+            </object>
+          </resources>
+          <build>
+            <item objectid="3" />
+          </build>
+        </model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let mesh = try ThreeMFMeshParser.parseMesh(from: url)
+
+        // Both components emitted → two triangles → six vertices.
+        XCTAssertEqual(mesh.vertices.count, 6, "both components should be emitted")
+        XCTAssertEqual(mesh.indices.count, 6)
+        // Component 1 translated +100 in x; component 2 translated +100 in y.
+        let maxX = mesh.vertices.map(\.x).max() ?? 0
+        let maxY = mesh.vertices.map(\.y).max() ?? 0
+        XCTAssertEqual(maxX, 101.0, accuracy: 0.01, "component 1's x-translation must apply")
+        XCTAssertEqual(maxY, 101.0, accuracy: 0.01, "component 2's y-translation must apply")
+    }
+
+    func testParse3MF_separateFileComponent_composesWithBuildItem() throws {
+        // Bambu-style: object 1's mesh lives in a separate ZIP entry, referenced by a
+        // component with its own transform (+50 x). The build item adds +7 y. A correct
+        // renderer composes BOTH: sub-mesh vertices land at (+50 x, +7 y). Before the
+        // expandObject fix, the separate-file path applied only the build-item transform
+        // and dropped the component's +50 x.
+        let rootModel = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+               xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06">
+          <resources>
+            <object id="1" type="model">
+              <components>
+                <component objectid="2" p:path="/3D/Objects/obj2.model" transform="1 0 0 0 1 0 0 0 1 50 0 0" />
+              </components>
+            </object>
+          </resources>
+          <build>
+            <item objectid="1" transform="1 0 0 0 1 0 0 0 1 0 7 0" />
+          </build>
+        </model>
+        """
+        let obj2Model = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+          <resources>
+            <object id="2" type="model">
+              <mesh>
+                <vertices>
+                  <vertex x="0" y="0" z="0" /><vertex x="1" y="0" z="0" /><vertex x="0" y="1" z="0" />
+                </vertices>
+                <triangles><triangle v1="0" v2="1" v3="2" /></triangles>
+              </mesh>
+            </object>
+          </resources>
+        </model>
+        """
+        let url = try make3MFFile(entries: [
+            (path: "3D/3dmodel.model", content: rootModel.data(using: .utf8)!),
+            (path: "3D/Objects/obj2.model", content: obj2Model.data(using: .utf8)!),
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let mesh = try ThreeMFMeshParser.parseMesh(from: url)
+
+        XCTAssertEqual(mesh.vertices.count, 3, "the separate-file sub-mesh must be emitted")
+        let minX = mesh.vertices.map(\.x).min() ?? 0
+        let minY = mesh.vertices.map(\.y).min() ?? 0
+        // vertex (0,0,0) → component +50x → build-item +7y → (50, 7, 0)
+        XCTAssertEqual(minX, 50.0, accuracy: 0.01, "component +50 x must compose in")
+        XCTAssertEqual(minY, 7.0, accuracy: 0.01, "build-item +7 y must compose in")
+    }
+
+    func testParse3MF_objectLevelMaterial_inheritedByTriangles() throws {
+        // Core-spec single-color object: the material is set at the OBJECT level via
+        // pid/pindex; the triangle carries no material of its own. It must inherit the
+        // object's material (index 0), not render uncolored (-1). Common shape for
+        // single-color CAD/PrusaSlicer exports.
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+          <resources>
+            <basematerials id="1">
+              <base name="red" displaycolor="#FF0000" />
+              <base name="green" displaycolor="#00FF00" />
+            </basematerials>
+            <object id="2" type="model" pid="1" pindex="1">
+              <mesh>
+                <vertices>
+                  <vertex x="0" y="0" z="0" /><vertex x="1" y="0" z="0" /><vertex x="0" y="1" z="0" />
+                </vertices>
+                <triangles><triangle v1="0" v2="1" v3="2" /></triangles>
+              </mesh>
+            </object>
+          </resources>
+          <build><item objectid="2" /></build>
+        </model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let mesh = try ThreeMFMeshParser.parseMesh(from: url)
+
+        XCTAssertEqual(mesh.materials.count, 2)
+        XCTAssertEqual(mesh.triangleMaterials.count, 1)
+        // pindex=1 → the second material (green), inherited by the un-attributed triangle.
+        XCTAssertEqual(mesh.triangleMaterials.first, 1, "triangle must inherit object's pindex material")
+    }
+
     func testParse3MF_noModel_throws() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
