@@ -65,7 +65,7 @@ jobs:
             CHANGELOG.md
 
       - name: Download unsigned artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: threemf-unsigned
 
@@ -250,7 +250,7 @@ jobs:
       contents: read
     steps:
       - name: Download signed artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: threemf-signed
 
