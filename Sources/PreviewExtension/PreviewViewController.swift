@@ -66,11 +66,19 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
     fileprivate func handleRootKeyDown(event: NSEvent) -> Bool {
         // Plate-cycling arrow keys work whenever plates are loaded, regardless of mode.
         let key = Int(event.keyCode)
-        if key == 123 { cyclePlate(-1); return true } // left arrow
-        if key == 124 { cyclePlate(+1); return true } // right arrow
+        if key == 123 {
+            cyclePlate(-1); return true
+        } // left arrow
+        if key == 124 {
+            cyclePlate(+1); return true
+        } // right arrow
         // Layer-stepping arrow keys (G-code mode). No-op outside G-code preview.
-        if key == 126 { stepLayer(+1); return layerScrubber != nil } // up arrow
-        if key == 125 { stepLayer(-1); return layerScrubber != nil } // down arrow
+        if key == 126 {
+            stepLayer(+1); return layerScrubber != nil
+        } // up arrow
+        if key == 125 {
+            stepLayer(-1); return layerScrubber != nil
+        } // down arrow
 
         guard let chars = event.charactersIgnoringModifiers, !chars.isEmpty else { return false }
         switch chars.lowercased() {
@@ -279,7 +287,9 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
                   scrubber.currentLayer < total - 1
             {
                 try? await Task.sleep(nanoseconds: 33_000_000) // ~30 fps
-                if Task.isCancelled { break }
+                if Task.isCancelled {
+                    break
+                }
                 let next = min(total - 1, scrubber.currentLayer + stepSize)
                 scrubber.setLayer(next)
                 self.setVisibleToolpathLayers(through: next)
@@ -659,7 +669,9 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
     /// Returns true if event was handled. Called from ZoomSCNView when a 3D scene is showing.
     fileprivate func handleSceneKeyDown(event: NSEvent) -> Bool {
         // Shared root shortcuts (?, arrows) take precedence so they work in 3D mode too.
-        if handleRootKeyDown(event: event) { return true }
+        if handleRootKeyDown(event: event) {
+            return true
+        }
 
         guard let chars = event.charactersIgnoringModifiers, !chars.isEmpty else { return false }
         let c = chars.lowercased()

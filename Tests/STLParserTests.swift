@@ -307,8 +307,12 @@ class STLParserTests: XCTestCase {
                 quantize(b),
                 quantize(c),
             ].sorted { lhs, rhs in
-                if lhs[0] != rhs[0] { return lhs[0] < rhs[0] }
-                if lhs[1] != rhs[1] { return lhs[1] < rhs[1] }
+                if lhs[0] != rhs[0] {
+                    return lhs[0] < rhs[0]
+                }
+                if lhs[1] != rhs[1] {
+                    return lhs[1] < rhs[1]
+                }
                 return lhs[2] < rhs[2]
             }
             out.insert(q.flatMap(\.self))
@@ -340,7 +344,9 @@ class STLParserTests: XCTestCase {
                     v2: (x + 1, y, z),
                     v3: (x, y + 1, z)
                 ))
-                if out.count >= count { break outer }
+                if out.count >= count {
+                    break outer
+                }
             }
         }
         return out

@@ -239,14 +239,18 @@ public enum STLParser {
                             indices.append(idx)
                         }
                         // Bound aggregate triangle count under aggressive crafted input.
-                        if indices.count >= maxTriangles * 3 { break }
+                        if indices.count >= maxTriangles * 3 {
+                            break
+                        }
                     }
                 }
                 // Advance to next newline.
                 while pos < count, base[pos] != 0x0A {
                     pos += 1
                 }
-                if pos < count { pos += 1 }
+                if pos < count {
+                    pos += 1
+                }
             }
         }
 
@@ -271,7 +275,9 @@ public enum STLParser {
         let start = pos
         while pos < count {
             let c = base[pos]
-            if c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D { break }
+            if c == 0x20 || c == 0x09 || c == 0x0A || c == 0x0D {
+                break
+            }
             pos += 1
         }
         return start < pos ? start ..< pos : nil
@@ -285,8 +291,11 @@ public enum STLParser {
         guard i < end else { return 0 }
 
         var negative = false
-        if base[i] == 0x2D { negative = true; i += 1 }
-        else if base[i] == 0x2B { i += 1 }
+        if base[i] == 0x2D {
+            negative = true; i += 1
+        } else if base[i] == 0x2B {
+            i += 1
+        }
 
         var intPart: Double = 0
         while i < end, base[i] >= 0x30, base[i] <= 0x39 {
@@ -307,8 +316,11 @@ public enum STLParser {
         if i < end, base[i] == 0x65 || base[i] == 0x45 {
             i += 1
             var expNeg = false
-            if i < end, base[i] == 0x2D { expNeg = true; i += 1 }
-            else if i < end, base[i] == 0x2B { i += 1 }
+            if i < end, base[i] == 0x2D {
+                expNeg = true; i += 1
+            } else if i < end, base[i] == 0x2B {
+                i += 1
+            }
             var exp = 0
             while i < end, base[i] >= 0x30, base[i] <= 0x39 {
                 exp = exp * 10 + Int(base[i] - 0x30)
@@ -341,8 +353,12 @@ private struct VertexKey: Hashable {
     private static func quantize(_ v: Float) -> Int32 {
         guard v.isFinite else { return 0 }
         let scaled = (Double(v) * 10000).rounded()
-        if scaled >= Double(Int32.max) { return Int32.max }
-        if scaled <= Double(Int32.min) { return Int32.min }
+        if scaled >= Double(Int32.max) {
+            return Int32.max
+        }
+        if scaled <= Double(Int32.min) {
+            return Int32.min
+        }
         return Int32(scaled)
     }
 }

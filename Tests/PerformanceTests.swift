@@ -83,7 +83,9 @@ final class PerformanceTests: XCTestCase {
                 var attr: UInt16 = 0
                 data.append(Data(bytes: &attr, count: 2))
                 emitted += 1
-                if emitted >= count { break outer }
+                if emitted >= count {
+                    break outer
+                }
             }
         }
         try data.write(to: url)

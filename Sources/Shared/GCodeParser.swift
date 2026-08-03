@@ -91,7 +91,9 @@ public enum GCodeParser {
                 // beyond 1 means a different command (G10, G11) which we ignore for now.
                 if p + 2 < endOfCode {
                     let c2 = base[p + 2]
-                    if c2 >= 0x30, c2 <= 0x39 { continue } // G10, G11, G12, etc.
+                    if c2 >= 0x30, c2 <= 0x39 {
+                        continue
+                    } // G10, G11, G12, etc.
                 }
                 p += 2
 
@@ -111,9 +113,15 @@ public enum GCodeParser {
                     while p < endOfCode {
                         let c = base[p]
                         // End of token when we hit whitespace or another letter.
-                        if c == 0x20 || c == 0x09 { break }
-                        if c >= 0x41, c <= 0x5A { break } // A-Z
-                        if c >= 0x61, c <= 0x7A { break } // a-z
+                        if c == 0x20 || c == 0x09 {
+                            break
+                        }
+                        if c >= 0x41, c <= 0x5A {
+                            break
+                        } // A-Z
+                        if c >= 0x61, c <= 0x7A {
+                            break
+                        } // a-z
                         p += 1
                     }
                     let value = parseFloat(base: base, start: valStart, end: p)
@@ -191,8 +199,11 @@ public enum GCodeParser {
         var i = start
         guard i < end else { return 0 }
         var negative = false
-        if base[i] == 0x2D { negative = true; i += 1 }
-        else if base[i] == 0x2B { i += 1 }
+        if base[i] == 0x2D {
+            negative = true; i += 1
+        } else if base[i] == 0x2B {
+            i += 1
+        }
         var intPart: Double = 0
         while i < end, base[i] >= 0x30, base[i] <= 0x39 {
             intPart = intPart * 10 + Double(base[i] - 0x30)
@@ -212,8 +223,11 @@ public enum GCodeParser {
         if i < end, base[i] == 0x65 || base[i] == 0x45 {
             i += 1
             var expNeg = false
-            if i < end, base[i] == 0x2D { expNeg = true; i += 1 }
-            else if i < end, base[i] == 0x2B { i += 1 }
+            if i < end, base[i] == 0x2D {
+                expNeg = true; i += 1
+            } else if i < end, base[i] == 0x2B {
+                i += 1
+            }
             var exp = 0
             while i < end, base[i] >= 0x30, base[i] <= 0x39 {
                 exp = exp * 10 + Int(base[i] - 0x30)

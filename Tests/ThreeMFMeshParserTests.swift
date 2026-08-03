@@ -167,8 +167,8 @@ class ThreeMFMeshParserTests: XCTestCase {
         </model>
         """
         let url = try make3MFFile(entries: [
-            (path: "3D/3dmodel.model", content: rootModel.data(using: .utf8)!),
-            (path: "3D/Objects/obj2.model", content: obj2Model.data(using: .utf8)!),
+            (path: "3D/3dmodel.model", content: XCTUnwrap(rootModel.data(using: .utf8))),
+            (path: "3D/Objects/obj2.model", content: XCTUnwrap(obj2Model.data(using: .utf8))),
         ])
         defer { try? FileManager.default.removeItem(at: url) }
 

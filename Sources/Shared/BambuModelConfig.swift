@@ -55,7 +55,9 @@ public struct BambuModelConfig: Sendable, Hashable {
     public var objectPlateIndex: [String: Int] {
         var map: [String: Int] = [:]
         for (idx, plate) in plates.enumerated() {
-            for oid in plate.objectIds { map[oid] = idx }
+            for oid in plate.objectIds {
+                map[oid] = idx
+            }
         }
         return map
     }
@@ -145,7 +147,9 @@ public struct BambuModelConfig: Sendable, Hashable {
             var r = 0
             for i in 0 ..< n {
                 guard pos < bits.count else { break }
-                if bits[pos] { r |= (1 << i) }
+                if bits[pos] {
+                    r |= (1 << i)
+                }
                 pos += 1
             }
             return r
@@ -161,19 +165,27 @@ public struct BambuModelConfig: Sendable, Hashable {
                     state = sc
                 } else {
                     let e = read(4)
-                    if e == 14 { state = 17 + read(8) } else { state = 3 + e }
+                    if e == 14 {
+                        state = 17 + read(8)
+                    } else {
+                        state = 3 + e
+                    }
                 }
                 states.append(state)
             } else {
                 _ = read(2) // special_side
-                for _ in 0 ... nss { decode(depth: depth + 1) } // nss + 1 children
+                for _ in 0 ... nss {
+                    decode(depth: depth + 1)
+                } // nss + 1 children
             }
         }
         decode(depth: 0)
         let painted = states.filter { $0 >= 1 }
         guard !painted.isEmpty else { return 0 }
         var counts: [Int: Int] = [:]
-        for s in painted { counts[s, default: 0] += 1 }
+        for s in painted {
+            counts[s, default: 0] += 1
+        }
         return counts.max { $0.value < $1.value }?.key ?? 0
     }
 
@@ -270,12 +282,16 @@ private final class ModelSettingsDelegate: NSObject, XMLParserDelegate {
         namespaceURI _: String?,
         qualifiedName _: String?
     ) {
-        if !stack.isEmpty { stack.removeLast() }
+        if !stack.isEmpty {
+            stack.removeLast()
+        }
         switch elementName {
         case "object":
             currentObjectId = nil
         case "plate":
-            if let plate = currentPlate { plates.append(plate) }
+            if let plate = currentPlate {
+                plates.append(plate)
+            }
             currentPlate = nil
         default:
             break

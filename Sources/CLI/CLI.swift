@@ -84,7 +84,9 @@ enum CLI {
             }
             for await line in group {
                 guard let line else { continue }
-                if line.hasPrefix("FAIL ") { anyFailed = true }
+                if line.hasPrefix("FAIL ") {
+                    anyFailed = true
+                }
                 FileHandle.standardOutput.write(Data("\(line)\n".utf8))
             }
         }

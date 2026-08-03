@@ -179,8 +179,12 @@ public enum SceneBuilder {
 
         // Stable order: default group (-1) first, then materials in ascending order.
         let orderedKeys = groups.keys.sorted { a, b in
-            if a == -1 { return true }
-            if b == -1 { return false }
+            if a == -1 {
+                return true
+            }
+            if b == -1 {
+                return false
+            }
             return a < b
         }
 
@@ -206,11 +210,15 @@ public enum SceneBuilder {
             orderedKeys.append(-1)
         }
         for m in mesh.triangleMaterials.sorted() where m >= 0 {
-            if seen.insert(m).inserted { orderedKeys.append(m) }
+            if seen.insert(m).inserted {
+                orderedKeys.append(m)
+            }
         }
 
         return orderedKeys.map { key in
-            if key == -1 { return defaultMaterial }
+            if key == -1 {
+                return defaultMaterial
+            }
             guard key < mesh.materials.count, let color = mesh.materials[key].color else {
                 return defaultMaterial
             }

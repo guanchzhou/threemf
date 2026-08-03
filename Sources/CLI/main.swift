@@ -56,7 +56,9 @@ do {
             semaphore.signal()
         }
         semaphore.wait()
-        if let batchError { throw batchError }
+        if let batchError {
+            throw batchError
+        }
     case "-h", "--help", "help":
         CLI.printUsage()
         exit(0)

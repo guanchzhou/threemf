@@ -183,7 +183,9 @@ public enum ThreeMFMeshParser {
                 log.error("Rejected suspicious component path: \(comp.path, privacy: .public)")
                 continue
             }
-            if objectMeshes[comp.objectId] != nil { continue }
+            if objectMeshes[comp.objectId] != nil {
+                continue
+            }
 
             if let entry = archive[normalized] {
                 let data: Data
@@ -262,7 +264,10 @@ public enum ThreeMFMeshParser {
                 for emission in emissions {
                     guard let mesh = objectMeshes[emission.meshObjectId] else { continue }
                     guard canAppend(verts: mesh.vertices.count, tris: mesh.indices.count / 3) else {
-                        log.error("Skipping object \(emission.meshObjectId, privacy: .public) — would exceed aggregate caps")
+                        log
+                            .error(
+                                "Skipping object \(emission.meshObjectId, privacy: .public) — would exceed aggregate caps"
+                            )
                         continue
                     }
 
@@ -294,7 +299,10 @@ public enum ThreeMFMeshParser {
                         // Base color = object's extruder; per-triangle paint overrides it.
                         let baseMatIdx = bambuObjMaterial[item.objectId] ?? -1
                         if allTriangleMats.count < triBase {
-                            allTriangleMats.append(contentsOf: repeatElement(-1, count: triBase - allTriangleMats.count))
+                            allTriangleMats.append(contentsOf: repeatElement(
+                                -1,
+                                count: triBase - allTriangleMats.count
+                            ))
                         }
                         let paint = objectPaintStates[emission.meshObjectId]
                         if let paint, paint.count == triCountThisItem {
@@ -311,7 +319,10 @@ public enum ThreeMFMeshParser {
                         }
                     } else if !mesh.triangleMaterials.isEmpty {
                         if allTriangleMats.count < triBase {
-                            allTriangleMats.append(contentsOf: repeatElement(-1, count: triBase - allTriangleMats.count))
+                            allTriangleMats.append(contentsOf: repeatElement(
+                                -1,
+                                count: triBase - allTriangleMats.count
+                            ))
                         }
                         allTriangleMats.append(contentsOf: mesh.triangleMaterials)
                     }
@@ -319,7 +330,10 @@ public enum ThreeMFMeshParser {
                     if bambuHasPlates {
                         let plateIdx = bambuObjPlate[item.objectId] ?? -1
                         if allTrianglePlates.count < triBase {
-                            allTrianglePlates.append(contentsOf: repeatElement(-1, count: triBase - allTrianglePlates.count))
+                            allTrianglePlates.append(contentsOf: repeatElement(
+                                -1,
+                                count: triBase - allTrianglePlates.count
+                            ))
                         }
                         allTrianglePlates.append(contentsOf: repeatElement(plateIdx, count: triCountThisItem))
                     }
@@ -481,14 +495,18 @@ public enum ThreeMFMeshParser {
     /// the result equals applying `inner` then `outer`: `v · result == (v · inner) · outer`.
     /// Each matrix's implicit last column is (0,0,0,1); row 3 is the translation.
     static func composeTransforms(_ inner: [Float], _ outer: [Float]) -> [Float] {
-        func e(_ m: [Float], _ r: Int, _ c: Int) -> Float { m[r * 3 + c] }
+        func e(_ m: [Float], _ r: Int, _ c: Int) -> Float {
+            m[r * 3 + c]
+        }
         var out = [Float](repeating: 0, count: 12)
         for i in 0 ..< 4 {
             for j in 0 ..< 3 {
                 var s = e(inner, i, 0) * e(outer, 0, j)
                     + e(inner, i, 1) * e(outer, 1, j)
                     + e(inner, i, 2) * e(outer, 2, j)
-                if i == 3 { s += e(outer, 3, j) } // inner's implicit w=1 carries outer's translation
+                if i == 3 {
+                    s += e(outer, 3, j)
+                } // inner's implicit w=1 carries outer's translation
                 out[i * 3 + j] = s
             }
         }
@@ -536,7 +554,9 @@ private final class NSXMLFallbackDelegate: NSObject, XMLParserDelegate {
         case "mesh":
             inMesh = true
         case "vertex" where inMesh:
-            if vertices.count >= maxVertices { parser.abortParsing(); return }
+            if vertices.count >= maxVertices {
+                parser.abortParsing(); return
+            }
             guard
                 let xs = attrs["x"], let ys = attrs["y"], let zs = attrs["z"],
                 let x = Float(xs), let y = Float(ys), let z = Float(zs),
@@ -544,7 +564,9 @@ private final class NSXMLFallbackDelegate: NSObject, XMLParserDelegate {
             else { return }
             vertices.append(simd_float3(x, y, z))
         case "triangle" where inMesh:
-            if indices.count / 3 >= maxTriangles { parser.abortParsing(); return }
+            if indices.count / 3 >= maxTriangles {
+                parser.abortParsing(); return
+            }
             guard
                 let v1s = attrs["v1"], let v2s = attrs["v2"], let v3s = attrs["v3"],
                 let v1 = UInt32(v1s), let v2 = UInt32(v2s), let v3 = UInt32(v3s)
@@ -564,7 +586,9 @@ private final class NSXMLFallbackDelegate: NSObject, XMLParserDelegate {
         qualifiedName _: String?
     ) {
         let local = elementName.split(separator: ":").last.map(String.init) ?? elementName
-        if local.lowercased() == "mesh" { inMesh = false }
+        if local.lowercased() == "mesh" {
+            inMesh = false
+        }
     }
 }
 
@@ -701,7 +725,9 @@ private struct ByteScanner {
                             indices: currentIndices,
                             triangleMaterials: mats
                         )
-                        if hasAnyPaint { objectPaintStates[objId] = currentPaintStates }
+                        if hasAnyPaint {
+                            objectPaintStates[objId] = currentPaintStates
+                        }
                     }
                     currentObjectId = nil
                     hasAnyMaterial = false
@@ -792,19 +818,37 @@ private struct ByteScanner {
         // Match common tag names by length then first char
         switch len {
         case 4:
-            if matchesCaseInsensitiveAt(nameStart, "mesh") { return .mesh }
-            if matchesCaseInsensitiveAt(nameStart, "item") { return .item }
-            if matchesCaseInsensitiveAt(nameStart, "base") { return .base }
+            if matchesCaseInsensitiveAt(nameStart, "mesh") {
+                return .mesh
+            }
+            if matchesCaseInsensitiveAt(nameStart, "item") {
+                return .item
+            }
+            if matchesCaseInsensitiveAt(nameStart, "base") {
+                return .base
+            }
         case 6:
-            if matchesCaseInsensitiveAt(nameStart, "vertex") { return .vertex }
-            if matchesCaseInsensitiveAt(nameStart, "object") { return .object }
+            if matchesCaseInsensitiveAt(nameStart, "vertex") {
+                return .vertex
+            }
+            if matchesCaseInsensitiveAt(nameStart, "object") {
+                return .object
+            }
         case 8:
-            if matchesCaseInsensitiveAt(nameStart, "triangle") { return .triangle }
-            if matchesCaseInsensitiveAt(nameStart, "metadata") { return .metadata }
+            if matchesCaseInsensitiveAt(nameStart, "triangle") {
+                return .triangle
+            }
+            if matchesCaseInsensitiveAt(nameStart, "metadata") {
+                return .metadata
+            }
         case 9:
-            if matchesCaseInsensitiveAt(nameStart, "component") { return .component }
+            if matchesCaseInsensitiveAt(nameStart, "component") {
+                return .component
+            }
         case 13:
-            if matchesCaseInsensitiveAt(nameStart, "basematerials") { return .basematerials }
+            if matchesCaseInsensitiveAt(nameStart, "basematerials") {
+                return .basematerials
+            }
         default:
             break
         }
@@ -843,7 +887,9 @@ private struct ByteScanner {
                 pos += 1
             }
             let valEnd = pos
-            if pos < count { pos += 1 } // skip closing quote
+            if pos < count {
+                pos += 1
+            } // skip closing quote
 
             // Match single-char attribute names x, y, z
             if attrLen == 1 {
@@ -899,7 +945,9 @@ private struct ByteScanner {
                 pos += 1
             }
             let valEnd = pos
-            if pos < count { pos += 1 }
+            if pos < count {
+                pos += 1
+            }
 
             // Match v1, v2, v3 (vertex indices) and p1 (per-tri material) and pid (group id).
             if attrLen == 2 {
@@ -953,7 +1001,9 @@ private struct ByteScanner {
             if let paintHex {
                 let state = BambuModelConfig.decodePaintColor(paintHex)
                 currentPaintStates.append(state)
-                if state >= 1 { hasAnyPaint = true }
+                if state >= 1 {
+                    hasAnyPaint = true
+                }
             } else {
                 currentPaintStates.append(0)
             }
@@ -1081,7 +1131,9 @@ private struct ByteScanner {
                 pos += 1
             }
             let valEnd = pos
-            if pos < count { pos += 1 }
+            if pos < count {
+                pos += 1
+            }
 
             if names.contains(attrName) {
                 result[attrName] = stringFromBytes(valStart, valEnd)
@@ -1125,7 +1177,9 @@ private struct ByteScanner {
     @inline(__always)
     private mutating func skipToTagEnd() {
         _ = skipTo(ByteScanner.gt)
-        if pos < count { pos += 1 }
+        if pos < count {
+            pos += 1
+        }
     }
 
     @inline(__always)
@@ -1133,7 +1187,9 @@ private struct ByteScanner {
         let utf8 = str.utf8
         guard offset + utf8.count <= count else { return false }
         for (i, ch) in utf8.enumerated() {
-            if base[offset + i] != ch { return false }
+            if base[offset + i] != ch {
+                return false
+            }
         }
         return true
     }
@@ -1144,7 +1200,9 @@ private struct ByteScanner {
         guard offset + utf8.count <= count else { return false }
         for (i, ch) in utf8.enumerated() {
             let b = base[offset + i]
-            if b != ch, b != ch - 32 { return false } // lowercase or uppercase
+            if b != ch, b != ch - 32 {
+                return false
+            } // lowercase or uppercase
         }
         return true
     }

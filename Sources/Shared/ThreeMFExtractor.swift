@@ -73,7 +73,9 @@ public enum ThreeMFExtractor {
         var scanned = 0
         for entry in archive {
             scanned += 1
-            if scanned > maxFallbackEntries { break }
+            if scanned > maxFallbackEntries {
+                break
+            }
             let path = entry.path.lowercased()
             if path.hasSuffix(".png"),
                path.hasPrefix("metadata/") || path.hasPrefix("thumbnail/")
@@ -133,14 +135,18 @@ public enum ThreeMFExtractor {
 
         for entry in archive {
             scanned += 1
-            if scanned > maxFallbackEntries { break }
+            if scanned > maxFallbackEntries {
+                break
+            }
             let lower = entry.path.lowercased()
             guard lower.hasPrefix("metadata/"), lower.hasSuffix(".png") else { continue }
             let basename = String(lower.split(separator: "/").last ?? "")
             guard let (kind, idx) = Self.plateKindAndIndex(basename: basename) else { continue }
             guard entry.uncompressedSize <= UInt64(maxThumbnailSize) else { continue }
             // Prefer the `plate_` render over `top_` for the same index; keep the first of a kind.
-            if let existing = byIndex[idx], existing.kind <= kind { continue }
+            if let existing = byIndex[idx], existing.kind <= kind {
+                continue
+            }
             byIndex[idx] = (kind, entry.path)
         }
 
@@ -206,7 +212,9 @@ public enum ThreeMFExtractor {
             } catch {
                 continue
             }
-            if let info = BambuPlateInfo.parse(data) { return info }
+            if let info = BambuPlateInfo.parse(data) {
+                return info
+            }
         }
         return nil
     }
@@ -220,7 +228,9 @@ public enum ThreeMFExtractor {
         for (prefix, kind) in [("plate_", 0), ("top_", 1)] {
             guard basename.hasPrefix(prefix), basename.hasSuffix(".png") else { continue }
             let mid = basename.dropFirst(prefix.count).dropLast(4) // strip prefix and ".png"
-            if let n = Int(mid) { return (kind, n) }
+            if let n = Int(mid) {
+                return (kind, n)
+            }
         }
         return nil
     }

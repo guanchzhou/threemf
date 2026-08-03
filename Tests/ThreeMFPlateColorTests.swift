@@ -83,7 +83,7 @@ struct ThreeMFPlateColorTests {
         #expect(mesh.trianglePlates == [0, 1]) // obj1→plateA(0), obj2→plateB(1)
     }
 
-    // Single object, multi-color via per-triangle paint_color (the Ender_Egg case).
+    /// Single object, multi-color via per-triangle paint_color (the Ender_Egg case).
     private static let paintedModel = """
     <?xml version="1.0" encoding="UTF-8"?>
     <model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
@@ -115,8 +115,12 @@ struct ThreeMFPlateColorTests {
         let archive = try Archive(url: url, accessMode: .create)
         func add(_ path: String, _ s: String) throws {
             let data = Data(s.utf8)
-            try archive.addEntry(with: path, type: .file, uncompressedSize: UInt32(data.count),
-                                 provider: { p, n in data.subdata(in: p ..< p + n) })
+            try archive.addEntry(
+                with: path,
+                type: .file,
+                uncompressedSize: UInt32(data.count),
+                provider: { p, n in data.subdata(in: p ..< p + n) }
+            )
         }
         try add("3D/3dmodel.model", Self.paintedModel)
         try add("Metadata/model_settings.config", Self.paintedModelSettings)
