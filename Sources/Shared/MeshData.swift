@@ -213,7 +213,9 @@ public struct MeshData {
                 }
                 newIndices.append(mapped)
             }
-            if hasMats, t < triangleMaterials.count { newTriMats.append(triangleMaterials[t]) }
+            if hasMats, t < triangleMaterials.count {
+                newTriMats.append(triangleMaterials[t])
+            }
         }
 
         var sub = MeshData(

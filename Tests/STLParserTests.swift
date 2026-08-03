@@ -307,8 +307,12 @@ class STLParserTests: XCTestCase {
                 quantize(b),
                 quantize(c),
             ].sorted { lhs, rhs in
-                if lhs[0] != rhs[0] { return lhs[0] < rhs[0] }
-                if lhs[1] != rhs[1] { return lhs[1] < rhs[1] }
+                if lhs[0] != rhs[0] {
+                    return lhs[0] < rhs[0]
+                }
+                if lhs[1] != rhs[1] {
+                    return lhs[1] < rhs[1]
+                }
                 return lhs[2] < rhs[2]
             }
             out.insert(q.flatMap(\.self))
@@ -340,7 +344,9 @@ class STLParserTests: XCTestCase {
                     v2: (x + 1, y, z),
                     v3: (x, y + 1, z)
                 ))
-                if out.count >= count { break outer }
+                if out.count >= count {
+                    break outer
+                }
             }
         }
         return out
@@ -389,6 +395,60 @@ class STLParserTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
         let mesh = try STLParser.parseMesh(from: url)
         XCTAssertEqual(mesh.indices.count, 3) // 1 triangle, 3 indices
+    }
+
+    // MARK: - Crafted-coordinate crash guards (regression: Int32(Float) trap)
+
+    func testParseBinarySTL_nonFiniteCoords_doesNotTrap() throws {
+        // A binary triangle carrying NaN and ±Inf coordinates. Before the quantize guard,
+        // VertexKey's `Int32(Float)` cast fatal-errored on NaN/Inf — crashing the extension.
+        let data = makeBinarySTL(triangles: [
+            Triangle(
+                normal: (0, 0, 1),
+                v1: (.nan, 0, 0),
+                v2: (.infinity, 1, 0),
+                v3: (-.infinity, 0, 1)
+            ),
+        ])
+        let url = try writeTempFile(data: data, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Contract is "no trap": it parses (degenerate coords collapse) or throws — never crashes.
+        let mesh = try STLParser.parseMesh(from: url)
+        XCTAssertGreaterThan(mesh.vertices.count, 0)
+    }
+
+    func testParseBinarySTL_hugeFiniteCoords_doesNotTrap() throws {
+        // Finite but far outside Int32 range after *10000 scaling (1e30 → 1e34).
+        // `Int32(1e34)` also traps; the clamp path must handle this.
+        let data = makeBinarySTL(triangles: [
+            Triangle(normal: (0, 0, 1), v1: (1e30, -1e30, 0), v2: (1, 0, 0), v3: (0, 1, 0)),
+        ])
+        let url = try writeTempFile(data: data, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let mesh = try STLParser.parseMesh(from: url)
+        XCTAssertEqual(mesh.indices.count, 3)
+    }
+
+    func testParseASCIISTL_overflowExponent_doesNotTrap() throws {
+        // `1e999` overflows Float to +Inf in parseFloatBytes; the vertex key must not trap.
+        let ascii = """
+        solid overflow
+          facet normal 0 0 1
+            outer loop
+              vertex 1e999 0 0
+              vertex 1 0 0
+              vertex 0 1 0
+            endloop
+          endfacet
+        endsolid overflow
+        """
+        let url = try writeTempFile(string: ascii, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let mesh = try STLParser.parseMesh(from: url)
+        XCTAssertEqual(mesh.indices.count, 3)
     }
 
     func testParseASCIISTL_tabSeparatedAndCRLF() throws {

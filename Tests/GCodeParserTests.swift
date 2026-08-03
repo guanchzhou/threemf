@@ -32,6 +32,26 @@ final class GCodeParserTests: XCTestCase {
         XCTAssertEqual(travels, 1)
     }
 
+    func testParse_craftedCoords_estimatedSecondsStaysFiniteAndInIntRange() throws {
+        // Crafted G-code: `1e999` overflows to +Inf, `1e30` is huge-finite. Either would
+        // make estimatedSeconds non-finite / > Int.max, and the HUD's Int(...) cast would
+        // trap (crash the preview). The parser must sanitize it before returning.
+        let gcode = """
+        G0 X0 Y0 Z0.2 F1
+        G1 X1e999 Y0 E1 F1
+        G1 X1e30 Y1e30 E2 F1
+        """
+        let url = try writeTempFile(string: gcode)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let toolpath = try GCodeParser.parse(from: url)
+        XCTAssertTrue(toolpath.estimatedSeconds.isFinite)
+        XCTAssertGreaterThanOrEqual(toolpath.estimatedSeconds, 0)
+        // The whole point: the value survives an Int() cast without trapping.
+        XCTAssertLessThanOrEqual(toolpath.estimatedSeconds, Double(Int.max))
+        _ = Int(toolpath.estimatedSeconds.rounded())
+    }
+
     func testParse_multipleLayers_detected() throws {
         let gcode = """
         G0 X0 Y0 Z0.2

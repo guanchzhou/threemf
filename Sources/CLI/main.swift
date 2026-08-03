@@ -31,7 +31,7 @@ do {
             CLI.printUsage()
             exit(2)
         }
-        let size = CLI.parseSize(from: cliArgs) ?? 512
+        let size = try CLI.resolveSize(from: cliArgs)
         let useCache = cliArgs.contains("--cache")
         try CLI.thumbnail(
             input: URL(fileURLWithPath: cliArgs[2]),
@@ -56,7 +56,9 @@ do {
             semaphore.signal()
         }
         semaphore.wait()
-        if let batchError { throw batchError }
+        if let batchError {
+            throw batchError
+        }
     case "-h", "--help", "help":
         CLI.printUsage()
         exit(0)

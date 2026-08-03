@@ -19,7 +19,9 @@ class ZoomSCNView: SCNView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if keyDownHandler?(event) == true { return }
+        if keyDownHandler?(event) == true {
+            return
+        }
         super.keyDown(with: event)
     }
 
@@ -78,7 +80,9 @@ final class KeyableView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        if keyDownHandler?(event) == true { return }
+        if keyDownHandler?(event) == true {
+            return
+        }
         super.keyDown(with: event)
     }
 }

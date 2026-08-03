@@ -33,8 +33,12 @@ struct ThreeMFExtractorPlatesTests {
             "Metadata/plate_2.png", "Metadata/plate_2_small.png", "Metadata/top_2.png",
             "Metadata/thumbnail.png", "3D/3dmodel.model",
         ] {
-            try archive.addEntry(with: path, type: .file, uncompressedSize: UInt32(png.count),
-                                 provider: { p, n in png.subdata(in: p ..< p + n) })
+            try archive.addEntry(
+                with: path,
+                type: .file,
+                uncompressedSize: UInt32(png.count),
+                provider: { p, n in png.subdata(in: p ..< p + n) }
+            )
         }
         defer { try? FileManager.default.removeItem(at: url) }
 

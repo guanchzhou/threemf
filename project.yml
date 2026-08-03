@@ -175,6 +175,9 @@ targets:
     sources:
       - Tests
       - Sources/Shared
+      # CLI.swift only (not main.swift — top-level exec code can't live in a test bundle).
+      # Compiles alongside Sources/Shared so CLI/CLIError logic is unit-testable.
+      - Sources/CLI/CLI.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.andreymaltsev.3mf-quicklook.tests
@@ -182,3 +185,4 @@ targets:
     dependencies:
       - package: ZIPFoundation
       - sdk: SceneKit.framework
+      - sdk: AppKit.framework

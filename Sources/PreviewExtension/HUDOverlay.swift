@@ -125,17 +125,30 @@ final class HUDOverlay: NSVisualEffectView {
 
         // Append 3MF metadata when available.
         if let md = stats.metadata {
-            if let app = md.application { lines.append("\(String(localized: "Slicer")): \(app)") }
-            if let title = md.title { lines.append("\(String(localized: "Title")): \(title)") }
-            if let designer = md.designer { lines.append("\(String(localized: "Designer")): \(designer)") }
-            if let date = md.creationDate { lines.append("\(String(localized: "Created")): \(date)") }
+            if let app = md.application {
+                lines.append("\(String(localized: "Slicer")): \(app)")
+            }
+            if let title = md.title {
+                lines.append("\(String(localized: "Title")): \(title)")
+            }
+            if let designer = md.designer {
+                lines.append("\(String(localized: "Designer")): \(designer)")
+            }
+            if let date = md.creationDate {
+                lines.append("\(String(localized: "Created")): \(date)")
+            }
         }
 
         // Bambu/Orca plate JSON: filament weight, print time, machine.
         if let bp = stats.bambuPlate {
-            if let machine = bp.machineId { lines.append("\(String(localized: "Printer")): \(machine)") }
+            if let machine = bp.machineId {
+                lines.append("\(String(localized: "Printer")): \(machine)")
+            }
             if let g = bp
-                .totalFilamentGrams { lines.append("\(String(localized: "Filament")): \(String(format: "%.1f g", g))") }
+                .totalFilamentGrams
+            {
+                lines.append("\(String(localized: "Filament")): \(String(format: "%.1f g", g))")
+            }
             if let s = bp.predictionSeconds {
                 let h = s / 3600
                 let m = (s % 3600) / 60

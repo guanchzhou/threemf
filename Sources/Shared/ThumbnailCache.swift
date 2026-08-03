@@ -66,7 +66,9 @@ public enum ThumbnailCache {
         // Oldest-accessed first.
         let oldestFirst = stats.sorted { $0.accessed < $1.accessed }
         for entry in oldestFirst {
-            if totalBytes <= maxCacheBytes { break }
+            if totalBytes <= maxCacheBytes {
+                break
+            }
             try? fm.removeItem(at: entry.url)
             totalBytes -= entry.size
         }
