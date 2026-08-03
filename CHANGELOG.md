@@ -4,6 +4,15 @@ All notable changes to threemf are documented here. Format: Keep a Changelog. Ve
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-03
+### Fixed
+- **Component-based 3MF assemblies rendered wrong**: `<component>` transforms were parsed but never applied, so multi-part assemblies (common in CAD exports such as Fusion/SolidWorks) previewed with every sub-part collapsed at the origin, and only the first component appeared at all. Component transforms are now composed with the build-item transform — recursively and cycle-guarded — for both inline components and separate-file components (`p:path`).
+- **Single-color 3MF objects previewed grey**: an object-level material (core-spec `pid`/`pindex`) was ignored, so files that assign one color per object (typical for single-color CAD/PrusaSlicer exports) rendered uncolored. Triangles now inherit the object's default material.
+- **Crash on crafted mesh/toolpath files**: an `.stl` or `.gcode` with non-finite or out-of-range coordinates (NaN, ±Inf, `1e999`, or values beyond `Int32`) could trap an `Int(Float)` conversion and crash the Quick Look preview. Coordinate quantization (STL) and the print-time estimate (G-code) now guard for finiteness and clamp to a safe range.
+
+### Changed
+- **CLI error messages and exit codes**: `threemf-cli` now reports a clear "Unsupported file format" error (naming the extension and listing `.3mf`, `.stl`, `.gcode`) for unknown extensions instead of a misleading ".3mf archive" failure; validates `--size` (rejecting non-numeric, zero, negative, or oversized values instead of silently rendering the default or a 0×0 image); fixes a mislabeled batch-validation error; and documents its exit-code convention (`0` success, `1` runtime error, `2` usage) in `--help`.
+
 ## [1.4.0] - 2026-06-07
 ### Added
 - **True-color 3MF previews**: previews now render real filament colors instead of flat grey. Two Bambu/Orca color mechanisms are decoded — per-object extruder assignment (`Metadata/model_settings.config` → `filament_colour` palette) and per-triangle MMU paint (`paint_color`). A painted single-object model like the Minecraft dragon egg renders black with purple speckles; a multi-object model like the chicken renders each part in its filament color.
