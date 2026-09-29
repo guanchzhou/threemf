@@ -509,6 +509,17 @@ public enum ThreeMFMeshParser {
         return mesh
     }
 
+    /// True when `xmlData` contains a `<!DOCTYPE` or `<!ENTITY` declaration (case-insensitive).
+    /// NSXMLParser expands *internal* entities even with `shouldResolveExternalEntities = false`,
+    /// so any DTD/entity declaration is refused before parse rather than risk an entity bomb.
+    private static func containsDTDOrEntityDeclaration(_ xmlData: Data) -> Bool {
+        guard let text = String(data: xmlData, encoding: .utf8)
+            ?? String(data: xmlData, encoding: .isoLatin1)
+        else { return false }
+        return text.range(of: "<!DOCTYPE", options: .caseInsensitive) != nil
+            || text.range(of: "<!ENTITY", options: .caseInsensitive) != nil
+    }
+
     /// Runs `XMLParser` (NSXMLParser) over the root model file to recover vertices and
     /// triangles when the byte-level fast scanner returned empty. Bounded by the same
     /// `maxVertices` / `maxTriangles` aggregate caps. Returns nil if it can't recover anything.
@@ -516,6 +527,11 @@ public enum ThreeMFMeshParser {
         xmlData: Data,
         limits: ResourceLimits
     ) -> (vertices: [simd_float3], indices: [UInt32])? {
+        // Internal entity expansion is still on in NSXMLParser — skip the fallback entirely
+        // when a DTD or entity declaration is present rather than parsing a bomb.
+        if containsDTDOrEntityDeclaration(xmlData) {
+            return nil
+        }
         let delegate = NSXMLFallbackDelegate(
             maxVertices: limits.maxVertices,
             maxTriangles: limits.maxTriangles

@@ -78,4 +78,16 @@ final class CLITests: XCTestCase {
             XCTAssertTrue((error as? CLIError)?.errorDescription?.contains("Unsupported file format") ?? false)
         }
     }
+
+    // MARK: - batch info error JSONL
+
+    func testEncodeInfoErrorLine_escapesQuoteInFilename() throws {
+        let line = CLI.encodeInfoErrorLine(fileName: #"bad"name.3mf"#, message: "boom")
+        let data = try XCTUnwrap(line.data(using: .utf8))
+        let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        XCTAssertEqual(obj?["file"] as? String, #"bad"name.3mf"#)
+        XCTAssertEqual(obj?["error"] as? String, "boom")
+        // Sorted keys: "error" before "file"
+        XCTAssertTrue(line.hasPrefix(#"{"error":"#), line)
+    }
 }

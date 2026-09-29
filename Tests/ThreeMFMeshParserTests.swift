@@ -558,6 +558,27 @@ class ThreeMFMeshParserTests: XCTestCase {
         }
     }
 
+    /// NSXMLParser expands internal entities even with `shouldResolveExternalEntities = false`.
+    /// A tiny nested-entity DOCTYPE must be refused (fallback skipped) — no crash, no mesh.
+    func testParseMesh_internalEntityBomb_refused() throws {
+        // 2–3 nested entities is enough to prove we refuse DOCTYPE; do not expand a bomb.
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE lolz [
+          <!ENTITY lol "lol">
+          <!ENTITY lol2 "&lol;&lol;">
+          <!ENTITY lol3 "&lol2;&lol2;">
+        ]>
+        <model>&lol3;</model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        XCTAssertThrowsError(try ThreeMFMeshParser.parseMesh(from: url)) { error in
+            XCTAssertEqual(error as? ThreeMFMeshParserError, .noMeshData)
+        }
+    }
+
     /// Bambu-style 3MF: root model points to an external `/3D/Objects/object_1.model`.
     /// Build references the parent object whose component points at the external file.
     func testParseMesh_externalComponentReferences() throws {

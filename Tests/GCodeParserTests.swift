@@ -206,4 +206,108 @@ final class GCodeParserTests: XCTestCase {
         XCTAssertEqual(toolpath.totalTravelMM, 0)
         XCTAssertEqual(toolpath.estimatedSeconds, 0)
     }
+
+    func testParse_zeroPaddedG01_acceptedAsLinearMove() throws {
+        let gcode = """
+        G00 X0 Y0 Z0.2
+        G01 X10 Y0 E1
+        G01 X20 Y0 E2
+        """
+        let url = try writeTempFile(string: gcode)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let toolpath = try GCodeParser.parse(from: url)
+        XCTAssertEqual(toolpath.segments.count, 3)
+        let extrudes = toolpath.segments.count(where: { $0.extrudes })
+        XCTAssertEqual(extrudes, 2)
+        XCTAssertEqual(toolpath.segments[1].end.x, 10, accuracy: 0.001)
+        XCTAssertEqual(toolpath.segments[2].end.x, 20, accuracy: 0.001)
+    }
+
+    func testParse_relativeExtrusion_M83_bothDeltasExtrude() throws {
+        let gcode = """
+        G0 X0 Y0 Z0.2
+        M83
+        G1 X10 Y0 E0.5
+        G1 X20 Y0 E0.5
+        """
+        let url = try writeTempFile(string: gcode)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let toolpath = try GCodeParser.parse(from: url)
+        XCTAssertEqual(toolpath.segments.count, 3)
+        XCTAssertFalse(toolpath.segments[0].extrudes)
+        XCTAssertTrue(toolpath.segments[1].extrudes)
+        XCTAssertTrue(toolpath.segments[2].extrudes)
+    }
+
+    func testParse_relativeXYZ_G91_accumulatesPosition() throws {
+        let gcode = """
+        G0 X0 Y0 Z0
+        G91
+        G1 X10
+        G1 X10
+        """
+        let url = try writeTempFile(string: gcode)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let toolpath = try GCodeParser.parse(from: url)
+        XCTAssertEqual(toolpath.segments.last?.end.x ?? -.infinity, 20, accuracy: 0.001)
+    }
+
+    func testParse_nonFiniteCoordinate_dropsMove() throws {
+        let gcode = """
+        G0 X0 Y0 Z0.2
+        G1 X1e999 Y0 E1
+        G1 X10 Y0 E2
+        """
+        let url = try writeTempFile(string: gcode)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let toolpath = try GCodeParser.parse(from: url)
+        XCTAssertEqual(toolpath.segments.count, 2)
+        XCTAssertEqual(toolpath.segments[1].start.x, 0, accuracy: 0.001)
+        XCTAssertEqual(toolpath.segments[1].end.x, 10, accuracy: 0.001)
+        XCTAssertTrue(toolpath.segments.allSatisfy {
+            $0.start.x.isFinite && $0.end.x.isFinite
+        })
+    }
+
+    func testParse_arcG2_withIJ_subdividesAndReachesEndpoint() throws {
+        // Semicircle clockwise from (0,0) to (10,0) around center (5,0): I=5 J=0.
+        let gcode = """
+        G0 X0 Y0 Z0.2
+        G2 X10 Y0 I5 J0 E1 F600
+        """
+        let url = try writeTempFile(string: gcode)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let toolpath = try GCodeParser.parse(from: url)
+        XCTAssertGreaterThan(toolpath.segments.count, 2)
+        let last = try XCTUnwrap(toolpath.segments.last)
+        XCTAssertEqual(last.end.x, 10, accuracy: 0.01)
+        XCTAssertEqual(last.end.y, 0, accuracy: 0.01)
+        XCTAssertTrue(toolpath.segments.dropFirst().allSatisfy(\.extrudes))
+        // G2 CW from (0,0)→(10,0) around (5,0) sweeps through positive Y.
+        let midY = toolpath.segments.dropFirst().map(\.end.y).max() ?? 0
+        XCTAssertGreaterThan(midY, 1)
+    }
+
+    func testParse_arcG3_withIJ_subdividesAndReachesEndpoint() throws {
+        let gcode = """
+        G0 X0 Y0 Z0.2
+        G3 X10 Y0 I5 J0 E1 F600
+        """
+        let url = try writeTempFile(string: gcode)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let toolpath = try GCodeParser.parse(from: url)
+        XCTAssertGreaterThan(toolpath.segments.count, 2)
+        let last = try XCTUnwrap(toolpath.segments.last)
+        XCTAssertEqual(last.end.x, 10, accuracy: 0.01)
+        XCTAssertEqual(last.end.y, 0, accuracy: 0.01)
+        // G3 CCW from (0,0)→(10,0) around (5,0) sweeps through negative Y.
+        let midY = toolpath.segments.dropFirst().map(\.end.y).min() ?? 0
+        XCTAssertLessThan(midY, -1)
+    }
 }

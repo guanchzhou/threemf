@@ -19,16 +19,15 @@ final class FinderSyncExtension: FIFinderSync {
         ("PrusaSlicer", ["/Applications/PrusaSlicer.app"]),
     ]
 
+    /// Snapshotted at init so `menu(for:)` does not restat /Applications on every click.
+    private let slicers: [Slicer]
+
     override init() {
+        slicers = Self.discoverInstalledSlicers()
         super.init()
         // FIFinderSyncController only fires callbacks for items inside watched directories.
-        // We watch the user's home (Downloads/Documents/Desktop/iCloud Drive) and /Volumes
-        // (USB drives, network mounts, external SSDs — common storage for 3D-print archives).
-        // We don't badge anything — purely menu work.
-        FIFinderSyncController.default().directoryURLs = [
-            FileManager.default.homeDirectoryForCurrentUser,
-            URL(fileURLWithPath: "/Volumes"),
-        ]
+        // Watch the home directory plus local mounted volumes only — skip network shares.
+        FIFinderSyncController.default().directoryURLs = Self.watchedDirectories()
         log.debug("FinderSync extension initialized")
     }
 
@@ -44,7 +43,6 @@ final class FinderSyncExtension: FIFinderSync {
             return nil
         }
 
-        let slicers = installedSlicers()
         guard !slicers.isEmpty else { return nil }
 
         let menu = NSMenu(title: "")
@@ -78,12 +76,28 @@ final class FinderSyncExtension: FIFinderSync {
         }
     }
 
-    private func installedSlicers() -> [Slicer] {
-        Self.candidates.compactMap { candidate in
+    private static func discoverInstalledSlicers() -> [Slicer] {
+        candidates.compactMap { candidate in
             for path in candidate.paths where FileManager.default.fileExists(atPath: path) {
                 return Slicer(name: candidate.name, url: URL(fileURLWithPath: path))
             }
             return nil
         }
+    }
+
+    /// Home directory plus locally attached volumes (USB, external SSDs). Network
+    /// mounts are excluded via `volumeIsLocalKey`.
+    private static func watchedDirectories() -> Set<URL> {
+        var urls: Set<URL> = [FileManager.default.homeDirectoryForCurrentUser]
+        let volumes = FileManager.default.mountedVolumeURLs(
+            includingResourceValuesForKeys: [.volumeIsLocalKey],
+            options: [.skipHiddenVolumes]
+        ) ?? []
+        for volume in volumes {
+            let isLocal = (try? volume.resourceValues(forKeys: [.volumeIsLocalKey]))?.volumeIsLocal == true
+            guard isLocal else { continue }
+            urls.insert(volume)
+        }
+        return urls
     }
 }

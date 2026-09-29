@@ -67,10 +67,18 @@ enum CLI {
 
     /// Runs `info` or `validate` across many files concurrently. Output is JSONL for info
     /// and PASS/FAIL lines for validate. Exits non-zero if any file fails to parse.
+    /// In-flight work is capped at `max(1, activeProcessorCount)` so a huge batch cannot
+    /// spawn one task per file immediately.
     static func batch(action: String, files: [URL]) async throws {
         var anyFailed = false
+        let concurrency = max(1, ProcessInfo.processInfo.activeProcessorCount)
         await withTaskGroup(of: String?.self) { group in
-            for file in files {
+            var nextIndex = 0
+
+            func enqueueNext() {
+                guard nextIndex < files.count else { return }
+                let file = files[nextIndex]
+                nextIndex += 1
                 group.addTask {
                     switch action {
                     case "info":
@@ -82,12 +90,18 @@ enum CLI {
                     }
                 }
             }
+
+            for _ in 0 ..< min(concurrency, files.count) {
+                enqueueNext()
+            }
             for await line in group {
-                guard let line else { continue }
-                if line.hasPrefix("FAIL ") {
-                    anyFailed = true
+                if let line {
+                    if line.hasPrefix("FAIL ") {
+                        anyFailed = true
+                    }
+                    FileHandle.standardOutput.write(Data("\(line)\n".utf8))
                 }
-                FileHandle.standardOutput.write(Data("\(line)\n".utf8))
+                enqueueNext()
             }
         }
         if anyFailed {
@@ -105,8 +119,25 @@ enum CLI {
             let data = try encoder.encode(payload)
             return String(data: data, encoding: .utf8)
         } catch {
-            return "{\"file\":\"\(file.lastPathComponent)\",\"error\":\"\(error.localizedDescription)\"}"
+            return encodeInfoErrorLine(fileName: file.lastPathComponent, message: error.localizedDescription)
         }
+    }
+
+    /// Encodes a batch-info failure as a single JSON object (`file` + `error`, sorted keys).
+    /// Used instead of string interpolation so quotes in filenames stay valid JSONL.
+    static func encodeInfoErrorLine(fileName: String, message: String) -> String {
+        struct ErrorPayload: Encodable {
+            let file: String
+            let error: String
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(ErrorPayload(file: fileName, error: message)),
+              let line = String(data: data, encoding: .utf8)
+        else {
+            return #"{"error":"encode failed","file":""}"#
+        }
+        return line
     }
 
     private static func validateLine(for file: URL) async -> String? {

@@ -171,7 +171,13 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
         case "gcode":
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
-                    let toolpath = try GCodeParser.parse(from: url, limits: .quickLook, cancellation: cancellation)
+                    let toolpath = try GCodeParser.parse(
+                        from: url,
+                        limits: .quickLook,
+                        cancellation: cancellation,
+                        outputSegmentBudget: ResourceLimits.quickLook.previewGCodeSegments,
+                        computesStatistics: true
+                    )
                     DispatchQueue.main.async {
                         if self.isPreviewLoadCurrent(loadGeneration) {
                             self.showToolpathScene(from: toolpath)
@@ -256,18 +262,13 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
         }
     }
 
-    /// Re-emits the toolpath geometry to show only segments in `0...layer`.
+    /// Shows layers `0...layer` by toggling `isHidden` on per-layer child nodes.
     private func setVisibleToolpathLayers(through layer: Int) {
-        guard let toolpath = loadedToolpath, let node = toolpathModelNode else { return }
-        let geometry = ToolpathSceneBuilder.makeGeometry(
-            toolpath: toolpath,
-            colorMode: toolpathColorMode,
-            visibleLayers: 0 ... max(0, layer)
-        )
-        node.geometry = geometry
+        guard let node = toolpathModelNode else { return }
+        ToolpathSceneBuilder.setVisibleLayers(through: max(0, layer), on: node)
     }
 
-    /// Cycles the toolpath color mode (`c` key). Re-emits geometry with the new colors.
+    /// Cycles the toolpath color mode (`c` key). Rebuilds per-layer geometries once.
     private func cycleToolpathColorMode() {
         guard let toolpath = loadedToolpath, let node = toolpathModelNode else { return }
         let order: [ToolpathSceneBuilder.ColorMode] = [
@@ -275,13 +276,7 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
         ]
         let nextIndex = (order.firstIndex(of: toolpathColorMode) ?? 0) + 1
         toolpathColorMode = order[nextIndex % order.count]
-        let visible: ClosedRange<Int>? = layerScrubber.map { 0 ... $0.currentLayer }
-        let geometry = ToolpathSceneBuilder.makeGeometry(
-            toolpath: toolpath,
-            colorMode: toolpathColorMode,
-            visibleLayers: visible
-        )
-        node.geometry = geometry
+        ToolpathSceneBuilder.applyColorMode(toolpathColorMode, to: node, toolpath: toolpath)
         // Refresh the HUD label so the new mode appears under "Color Mode".
         if let hud = hudView {
             hud.update(toolpathStats: makeToolpathStats(for: toolpath))
@@ -807,26 +802,22 @@ class PreviewViewController: NSViewController, @preconcurrency QLPreviewingContr
 
     private func setCameraPreset(_ preset: CameraPreset) {
         guard let scnView, let cameraNode = scnView.pointOfView else { return }
-        // Distance roughly matches SceneBuilder's initial camera (~5 units away from origin).
-        let distance: Float = 5.0
-        let position
-            // SceneBuilder normalizes the model to ±1 around origin and rotates 3D-print Z-up to Y-up.
-            // Presets are expressed in SceneKit's Y-up world-space.
-            = switch preset
-        {
-        case .top:
-            SCNVector3(0, distance, 0.001)
-        case .bottom:
-            SCNVector3(0, -distance, 0.001)
-        case .front:
-            SCNVector3(0, 0, distance)
-        case .back:
-            SCNVector3(0, 0, -distance)
-        case .left:
-            SCNVector3(-distance, 0, 0)
-        case .right:
-            SCNVector3(distance, 0, 0)
+        // Models are normalized to ±1; match opening-camera fill/FOV from SceneBuilder.
+        let halfExtents = simd_float3(1, 1, 1)
+        let direction = switch preset {
+        case .top: simd_float3(0, 1, 0.001)
+        case .bottom: simd_float3(0, -1, 0.001)
+        case .front: simd_float3(0, 0, 1)
+        case .back: simd_float3(0, 0, -1)
+        case .left: simd_float3(-1, 0, 0)
+        case .right: simd_float3(1, 0, 0)
         }
+        let position = SceneBuilder.fittedCameraPosition(
+            halfExtents: halfExtents,
+            direction: direction,
+            fovDegrees: 45,
+            fill: 0.9
+        )
 
         // Respect "Reduce motion" — snap instead of animating.
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion

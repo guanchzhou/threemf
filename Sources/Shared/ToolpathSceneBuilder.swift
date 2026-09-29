@@ -2,8 +2,9 @@ import AppKit
 import SceneKit
 import simd
 
-/// Builds an SCNScene from `ToolpathData`. Each segment is rendered as one line in a
-/// single SCNGeometryElement (.line primitive). Lights/camera mirror `SceneBuilder.buildScene`.
+/// Builds an SCNScene from `ToolpathData`. Each layer is a child node under the
+/// `toolpath` parent with its own line-primitive SCNGeometry. Lights/camera mirror
+/// `SceneBuilder.buildScene`.
 public enum ToolpathSceneBuilder {
     /// How segments are colored in the rendered scene.
     public enum ColorMode: Sendable, Hashable {
@@ -17,6 +18,8 @@ public enum ToolpathSceneBuilder {
         case uniform
     }
 
+    private static let layerNodePrefix = "layer-"
+
     public static func buildScene(
         from toolpath: ToolpathData,
         colorMode: ColorMode = .layerRainbow,
@@ -26,8 +29,13 @@ public enum ToolpathSceneBuilder {
         let modelNode = SCNNode()
         modelNode.name = "toolpath"
 
-        let geometry = makeGeometry(toolpath: toolpath, colorMode: colorMode, visibleLayers: visibleLayers)
-        modelNode.geometry = geometry
+        addLayerNodes(to: modelNode, toolpath: toolpath, colorMode: colorMode)
+        if let range = visibleLayers {
+            for child in modelNode.childNodes {
+                guard let idx = layerIndex(from: child) else { continue }
+                child.isHidden = !range.contains(idx)
+            }
+        }
 
         // 3D-print Z-up to SceneKit Y-up.
         modelNode.eulerAngles.x = -.pi / 2
@@ -85,34 +93,122 @@ public enum ToolpathSceneBuilder {
         return scene
     }
 
+    /// Shows layers with `layerIndex <= layer` and hides the rest. Does not rebuild geometry.
+    public static func setVisibleLayers(through layer: Int, on modelNode: SCNNode) {
+        for child in modelNode.childNodes {
+            guard let idx = layerIndex(from: child) else { continue }
+            child.isHidden = idx > layer
+        }
+    }
+
+    /// Rebuilds each layer child's line geometry with a new color mode. Preserves `isHidden`.
+    public static func applyColorMode(
+        _ colorMode: ColorMode,
+        to modelNode: SCNNode,
+        toolpath: ToolpathData
+    ) {
+        let layerCount = max(1, toolpath.layerCount)
+        let (minFeed, maxFeed) = feedrateBounds(toolpath.segments)
+        let grouped = segmentsByLayer(toolpath.segments)
+        for child in modelNode.childNodes {
+            guard let idx = layerIndex(from: child) else { continue }
+            let segs = grouped[idx] ?? []
+            child.geometry = makeGeometry(
+                segments: segs,
+                colorMode: colorMode,
+                layerCount: layerCount,
+                minFeed: minFeed,
+                maxFeed: maxFeed
+            )
+        }
+    }
+
     // MARK: - Internals
 
-    /// Builds just the line-primitive geometry. Public so the preview controller can
-    /// swap geometry on the model node when the user scrubs the layer slider.
+    /// Builds just the line-primitive geometry. Public for callers that want a single
+    /// combined geometry (e.g. tests). Interactive preview uses per-layer nodes instead.
     public static func makeGeometry(
         toolpath: ToolpathData,
         colorMode: ColorMode,
         visibleLayers: ClosedRange<Int>?
     ) -> SCNGeometry {
-        // 2 vertices per segment; index buffer is just 0..<2N.
         let filtered: [ToolpathSegment] = if let range = visibleLayers {
             toolpath.segments.filter { range.contains($0.layerIndex) }
         } else {
             toolpath.segments
         }
+        let (minFeed, maxFeed) = feedrateBounds(filtered)
+        return makeGeometry(
+            segments: filtered,
+            colorMode: colorMode,
+            layerCount: max(1, toolpath.layerCount),
+            minFeed: minFeed,
+            maxFeed: maxFeed
+        )
+    }
 
-        var verts: [simd_float3] = []
-        verts.reserveCapacity(filtered.count * 2)
-        var colors: [simd_float3] = []
-        colors.reserveCapacity(filtered.count * 2)
-        var indices: [UInt32] = []
-        indices.reserveCapacity(filtered.count * 2)
-
+    private static func addLayerNodes(
+        to modelNode: SCNNode,
+        toolpath: ToolpathData,
+        colorMode: ColorMode
+    ) {
         let layerCount = max(1, toolpath.layerCount)
-        let maxFeed = filtered.map(\.feedrate).max() ?? 1
-        let minFeed = filtered.map(\.feedrate).filter { $0 > 0 }.min() ?? 1
+        let (minFeed, maxFeed) = feedrateBounds(toolpath.segments)
+        let grouped = segmentsByLayer(toolpath.segments)
+        for layerIndex in grouped.keys.sorted() {
+            let segs = grouped[layerIndex] ?? []
+            let child = SCNNode(
+                geometry: makeGeometry(
+                    segments: segs,
+                    colorMode: colorMode,
+                    layerCount: layerCount,
+                    minFeed: minFeed,
+                    maxFeed: maxFeed
+                )
+            )
+            child.name = layerNodeName(for: layerIndex)
+            modelNode.addChildNode(child)
+        }
+    }
 
-        for (i, seg) in filtered.enumerated() {
+    private static func segmentsByLayer(_ segments: [ToolpathSegment]) -> [Int: [ToolpathSegment]] {
+        var grouped: [Int: [ToolpathSegment]] = [:]
+        for seg in segments {
+            grouped[seg.layerIndex, default: []].append(seg)
+        }
+        return grouped
+    }
+
+    private static func feedrateBounds(_ segments: [ToolpathSegment]) -> (Float, Float) {
+        let maxFeed = segments.map(\.feedrate).max() ?? 1
+        let minFeed = segments.map(\.feedrate).filter { $0 > 0 }.min() ?? 1
+        return (minFeed, maxFeed)
+    }
+
+    private static func layerNodeName(for index: Int) -> String {
+        "\(layerNodePrefix)\(index)"
+    }
+
+    private static func layerIndex(from node: SCNNode) -> Int? {
+        guard let name = node.name, name.hasPrefix(layerNodePrefix) else { return nil }
+        return Int(name.dropFirst(layerNodePrefix.count))
+    }
+
+    private static func makeGeometry(
+        segments: [ToolpathSegment],
+        colorMode: ColorMode,
+        layerCount: Int,
+        minFeed: Float,
+        maxFeed: Float
+    ) -> SCNGeometry {
+        var verts: [simd_float3] = []
+        verts.reserveCapacity(segments.count * 2)
+        var colors: [simd_float3] = []
+        colors.reserveCapacity(segments.count * 2)
+        var indices: [UInt32] = []
+        indices.reserveCapacity(segments.count * 2)
+
+        for (i, seg) in segments.enumerated() {
             verts.append(seg.start)
             verts.append(seg.end)
             indices.append(UInt32(i * 2))

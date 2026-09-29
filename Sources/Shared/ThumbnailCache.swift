@@ -133,7 +133,10 @@ public enum ThumbnailCache {
         // 16 hex chars (64 bits) of the path hash is plenty for collision avoidance
         // among a single user's thumbnailable files.
         let pathHash = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
-        return "\(pathHash)-\(size)-\(Int(mtime.timeIntervalSince1970))"
+        // Milliseconds so two writes in the same second with different fractional
+        // mtimes don't share a key.
+        let mtimeMs = Int((mtime.timeIntervalSince1970 * 1000).rounded())
+        return "\(pathHash)-\(size)-\(mtimeMs)"
     }
 
     private static func resolvedMaxCacheBytes() -> Int {

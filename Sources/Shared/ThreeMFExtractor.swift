@@ -22,9 +22,15 @@ public enum ThreeMFExtractor {
     /// Maximum allowed thumbnail size (10 MB) to prevent ZIP bomb attacks
     private static let maxThumbnailSize = 10 * 1024 * 1024
 
-    /// Hard cap on entries scanned during the fallback PNG search. Bounds work on
-    /// archives with very large central directories; we only need to find one PNG.
-    private static let maxFallbackEntries = 256
+    /// Cap on central-directory entries walked by name (no extraction). High enough that
+    /// part-heavy Bambu archives — which list `3D/Objects/*.model` before `Metadata/` —
+    /// still reach plate PNGs. Bounds pathological million-entry ZIPs.
+    private static let maxDirectoryEntries = 50000
+
+    /// Cap on *candidate* thumbnail paths considered during the extractThumbnail fallback.
+    /// Only paths under `metadata/` / `thumbnail/` with a `.png` suffix count; model entries
+    /// do not. Bounds extraction attempts, not directory walks.
+    private static let maxFallbackCandidates = 256
 
     private static let knownThumbnailPaths = [
         "Metadata/plate_1.png",
@@ -69,30 +75,36 @@ public enum ThreeMFExtractor {
         }
 
         // Fallback: find any PNG in thumbnail-like directories.
-        // Bounded by maxFallbackEntries to prevent pathological archives from stalling.
-        var scanned = 0
+        // Walk up to maxDirectoryEntries names so Metadata/ is reachable after many
+        // 3D/Objects entries; only candidate PNG paths count toward maxFallbackCandidates.
+        // Extract at most one PNG.
+        var walked = 0
+        var candidates = 0
         for entry in archive {
-            scanned += 1
-            if scanned > maxFallbackEntries {
+            walked += 1
+            if walked > maxDirectoryEntries {
                 break
             }
             let path = entry.path.lowercased()
-            if path.hasSuffix(".png"),
-               path.hasPrefix("metadata/") || path.hasPrefix("thumbnail/")
-            {
-                guard entry.uncompressedSize <= UInt64(maxThumbnailSize) else {
+            guard path.hasSuffix(".png"),
+                  path.hasPrefix("metadata/") || path.hasPrefix("thumbnail/")
+            else { continue }
+            candidates += 1
+            if candidates > maxFallbackCandidates {
+                break
+            }
+            guard entry.uncompressedSize <= UInt64(maxThumbnailSize) else {
+                throw ThreeMFExtractorError.thumbnailTooLarge
+            }
+            var data = Data()
+            _ = try archive.extract(entry) { chunk in
+                data.append(chunk)
+                if data.count > maxThumbnailSize {
                     throw ThreeMFExtractorError.thumbnailTooLarge
                 }
-                var data = Data()
-                _ = try archive.extract(entry) { chunk in
-                    data.append(chunk)
-                    if data.count > maxThumbnailSize {
-                        throw ThreeMFExtractorError.thumbnailTooLarge
-                    }
-                }
-                if !data.isEmpty {
-                    return try validatedPNG(data)
-                }
+            }
+            if !data.isEmpty {
+                return try validatedPNG(data)
             }
         }
 
@@ -141,12 +153,14 @@ public enum ThreeMFExtractor {
         // only the canonical full-size render — basename exactly `plate_<N>.png` or, as a
         // fallback, `top_<N>.png` — counts as a plate. Anything with an extra suffix is a variant.
         // `kind` 0 = plate (preferred), 1 = top; we keep one path per plate index.
+        // Walk names only up to maxDirectoryEntries — do not charge model entries against a
+        // tiny cap, or part-heavy archives never reach Metadata/plate_N.png.
         var byIndex: [Int: (kind: Int, path: String)] = [:]
-        var scanned = 0
+        var walked = 0
 
         for entry in archive {
-            scanned += 1
-            if scanned > maxFallbackEntries {
+            walked += 1
+            if walked > maxDirectoryEntries {
                 break
             }
             let lower = entry.path.lowercased()

@@ -3,11 +3,11 @@ import AppKit
 import Foundation
 import SceneKit
 
-/// Returns a textual summary of a .3mf or .stl file. Surface for Siri / Shortcuts.
+/// Returns a textual summary of a .3mf, .stl, or .gcode file. Surface for Siri / Shortcuts.
 struct ShowThreeMFInfo: AppIntent {
     nonisolated(unsafe) static var title: LocalizedStringResource = "Show 3MF/STL Info"
     nonisolated(unsafe) static var description = IntentDescription(
-        "Returns triangle count, vertex count, bounding box, and metadata for a .3mf or .stl file."
+        "Returns triangle count, vertex count, bounding box, and metadata for a .3mf, .stl, or .gcode file."
     )
 
     @Parameter(title: "File")
@@ -61,12 +61,15 @@ struct ShowThreeMFInfo: AppIntent {
     }
 }
 
-/// Renders a PNG thumbnail of a .3mf or .stl file at a specified size. Surface for Shortcuts.
+/// Renders a PNG thumbnail of a .3mf, .stl, or .gcode file at a specified size. Surface for Shortcuts.
 struct RenderThreeMFThumbnail: AppIntent {
     nonisolated(unsafe) static var title: LocalizedStringResource = "Render 3MF/STL Thumbnail"
     nonisolated(unsafe) static var description = IntentDescription(
-        "Renders a PNG thumbnail of a .3mf or .stl file at the requested size."
+        "Renders a PNG thumbnail of a .3mf, .stl, or .gcode file at the requested size."
     )
+
+    /// Matches CLI.maxThumbnailSize — caps SCNRenderer.snapshot memory.
+    private static let maxThumbnailSize = 4096
 
     @Parameter(title: "File")
     var file: IntentFile
@@ -79,20 +82,32 @@ struct RenderThreeMFThumbnail: AppIntent {
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<IntentFile> {
+        guard size > 0, size <= Self.maxThumbnailSize else {
+            throw $size.needsValueError("Expected size between 1 and \(Self.maxThumbnailSize)")
+        }
         guard let url = file.fileURL else {
             throw $file.needsValueError("Expected a file with an on-disk URL")
         }
         let ext = url.pathExtension.lowercased()
-        let mesh: MeshData
+        let scene: SCNScene
         switch ext {
         case "stl":
-            mesh = try STLParser.parseMesh(from: url, limits: .quickLook)
+            let mesh = try STLParser.parseMesh(from: url, limits: .quickLook)
+            scene = SceneBuilder.buildScene(from: mesh)
         case "3mf":
-            mesh = try ThreeMFMeshParser.parseMesh(from: url, limits: .quickLook)
+            let mesh = try ThreeMFMeshParser.parseMesh(from: url, limits: .quickLook)
+            scene = SceneBuilder.buildScene(from: mesh)
+        case "gcode":
+            let toolpath = try GCodeParser.parse(
+                from: url,
+                limits: .quickLook,
+                outputSegmentBudget: GCodeParser.thumbnailSegmentBudget,
+                computesStatistics: false
+            )
+            scene = ToolpathSceneBuilder.buildTopDownScene(from: toolpath)
         default:
-            throw $file.needsValueError("Expected a .3mf or .stl file")
+            throw $file.needsValueError("Expected a .3mf, .stl, or .gcode file")
         }
-        let scene = SceneBuilder.buildScene(from: mesh)
         let renderer = SCNRenderer(device: nil, options: nil)
         renderer.scene = scene
         if let cam = scene.rootNode.childNode(withName: "camera", recursively: true) {

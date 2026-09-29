@@ -49,6 +49,21 @@ final class ThumbnailCacheTests: XCTestCase {
         XCTAssertNil(ThumbnailCache.cachedThumbnail(for: url))
     }
 
+    func testInvalidation_onSubsecondMtimeChange() throws {
+        let url = try makeSourceFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Same whole second, different fractional mtime — key uses milliseconds.
+        let first = Date(timeIntervalSince1970: 1_700_000_000.100)
+        try FileManager.default.setAttributes([.modificationDate: first], ofItemAtPath: url.path)
+        ThumbnailCache.store(png, for: url)
+        XCTAssertNotNil(ThumbnailCache.cachedThumbnail(for: url))
+
+        let sameSecond = Date(timeIntervalSince1970: 1_700_000_000.900)
+        try FileManager.default.setAttributes([.modificationDate: sameSecond], ofItemAtPath: url.path)
+        XCTAssertNil(ThumbnailCache.cachedThumbnail(for: url))
+    }
+
     func testDifferentPaths_haveDifferentKeys() throws {
         let url1 = try makeSourceFile(content: "first")
         let url2 = try makeSourceFile(content: "second")

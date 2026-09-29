@@ -51,4 +51,40 @@ struct ThreeMFExtractorPlatesTests {
         #expect(plates[0].path == "Metadata/plate_1.png")
         #expect(plates[1].path == "Metadata/plate_2.png")
     }
+
+    @Test("listPlates finds plate PNG after hundreds of preceding model entries")
+    func listPlatesPastManyModelEntries() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("plates-heavy-\(UUID().uuidString)").appendingPathExtension("3mf")
+        let archive = try Archive(url: url, accessMode: .create, pathEncoding: nil)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let dummy = Data("x".utf8)
+        for n in 1 ... 300 {
+            let path = "3D/Objects/object_\(n).model"
+            try archive.addEntry(
+                with: path,
+                type: .file,
+                uncompressedSize: Int64(dummy.count),
+                provider: { position, size in
+                    let start = Int(position)
+                    return dummy.subdata(in: start ..< start + size)
+                }
+            )
+        }
+        let png = TestPNG.tiny1x1
+        try archive.addEntry(
+            with: "Metadata/plate_1.png",
+            type: .file,
+            uncompressedSize: Int64(png.count),
+            provider: { position, size in
+                let start = Int(position)
+                return png.subdata(in: start ..< start + size)
+            }
+        )
+
+        let plates = ThreeMFExtractor.listPlates(from: url)
+        #expect(plates.map(\.index) == [1])
+        #expect(plates[0].path == "Metadata/plate_1.png")
+    }
 }
