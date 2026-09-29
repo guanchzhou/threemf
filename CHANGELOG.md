@@ -4,6 +4,26 @@ All notable changes to threemf are documented here. Format: Keep a Changelog. Ve
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-09-29
+
+### Fixed
+- **Slicer G-code dialects**: zero-padded `G00`/`G01` moves are parsed, `M83` relative extrusion is classified as extrusion, and `G90`/`G91` select absolute or relative XYZ. `G2`/`G3` arcs in the XY plane are linearized into chords so arc-welded toolpaths stay connected.
+- **Non-finite G-code coordinates**: values such as `1e999` are dropped instead of reaching the camera. Scientific notation stays inside the number instead of being read as a second `E` word.
+- **Camera presets**: keys 1–6 use the same fitted framing as the opening view.
+- **Multi-object plate thumbnails**: plate discovery walks the archive name list instead of stopping after 256 entries, so `Metadata/plate_N.png` is still found when hundreds of `3D/Objects` entries come first.
+- **Thumbnail cache freshness**: the cache key includes sub-second modification time, so a resave in the same second is not served as the previous PNG.
+- **Host copy and Shortcuts**: the host window mentions `.gcode`, and the thumbnail shortcut renders G-code as well as meshes.
+
+### Security
+- **XML fallback refuses internal entities**: a model that contains a `DOCTYPE` or `ENTITY` declaration is not passed to `NSXMLParser`, so a crafted `.3mf` cannot expand a billion-laughs payload inside Quick Look.
+- **Shortcuts thumbnail size**: the render intent rejects sizes outside 1…4096, matching the CLI.
+- **CLI batch errors are valid JSON**: failure lines are encoded with `JSONEncoder`, so a quote in a filename cannot break the JSONL stream.
+
+### Changed
+- **G-code preview memory**: Quick Look keeps at most 131,072 display segments while still walking the file for layer count and time estimates. Layer scrubbing and playback show or hide prebuilt per-layer nodes instead of rebuilding line geometry every frame.
+- **CLI batch concurrency**: `batch` runs at most one parse per CPU at a time.
+- **Finder Sync scope**: the extension watches the home directory and local volumes, and looks up installed slicers once.
+
 ## [1.5.2] - 2026-09-14
 
 ### Changed
