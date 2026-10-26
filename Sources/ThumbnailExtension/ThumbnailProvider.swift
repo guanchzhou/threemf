@@ -164,13 +164,25 @@ class ThumbnailProvider: QLThumbnailProvider {
         handler: @escaping (QLThumbnailReply?, Error?) -> Void
     ) {
         let maxSize = request.maximumSize
-        let imageSize = CGSize(width: image.width, height: image.height)
+        let backingScale = max(request.scale, 1)
+        // The decoded image is in pixels; contextSize is in points.
+        let imageSize = CGSize(
+            width: CGFloat(image.width) / backingScale,
+            height: CGFloat(image.height) / backingScale
+        )
         let scale = min(maxSize.width / imageSize.width, maxSize.height / imageSize.height, 1.0)
         let thumbnailSize = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
 
         let reply = QLThumbnailReply(contextSize: thumbnailSize) { (context: CGContext) -> Bool in
             context.interpolationQuality = .high
-            context.draw(image, in: CGRect(origin: .zero, size: thumbnailSize))
+            // The drawing context is in backing pixels, not points.
+            let pixelRect = CGRect(
+                x: 0,
+                y: 0,
+                width: thumbnailSize.width * backingScale,
+                height: thumbnailSize.height * backingScale
+            )
+            context.draw(image, in: pixelRect)
             return true
         }
         handler(reply, nil)

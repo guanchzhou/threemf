@@ -4,6 +4,9 @@ All notable changes to threemf are documented here. Format: Keep a Changelog. Ve
 
 ## [Unreleased]
 
+### Fixed
+- **Finder thumbnails from embedded PNGs were drawn at a quarter of their size**: `renderImageThumbnail` sized the reply in pixels but the Quick Look drawing context is in backing pixels while `contextSize` is in points, so on a Retina display the model sat in the bottom-left corner of the icon. The reply is now sized in points and drawn into `contextSize × request.scale`.
+
 ## [1.6.2] - 2026-10-25
 
 ### Security
