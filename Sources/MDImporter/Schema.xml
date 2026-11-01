@@ -12,6 +12,10 @@
             <allattrs>com_andreymaltsev_threemf_triangleCount com_andreymaltsev_threemf_vertexCount com_andreymaltsev_threemf_widthMM com_andreymaltsev_threemf_depthMM com_andreymaltsev_threemf_heightMM com_andreymaltsev_threemf_slicer</allattrs>
             <displayattrs>com_andreymaltsev_threemf_triangleCount com_andreymaltsev_threemf_slicer</displayattrs>
         </type>
+        <type name="com.shapr3d.3d-manufacturing.3mf">
+            <allattrs>com_andreymaltsev_threemf_triangleCount com_andreymaltsev_threemf_vertexCount com_andreymaltsev_threemf_widthMM com_andreymaltsev_threemf_depthMM com_andreymaltsev_threemf_heightMM com_andreymaltsev_threemf_slicer</allattrs>
+            <displayattrs>com_andreymaltsev_threemf_triangleCount com_andreymaltsev_threemf_slicer</displayattrs>
+        </type>
         <type name="public.standard-tesselated-geometry-format">
             <allattrs>com_andreymaltsev_threemf_triangleCount com_andreymaltsev_threemf_vertexCount com_andreymaltsev_threemf_widthMM com_andreymaltsev_threemf_depthMM com_andreymaltsev_threemf_heightMM</allattrs>
             <displayattrs>com_andreymaltsev_threemf_triangleCount</displayattrs>
