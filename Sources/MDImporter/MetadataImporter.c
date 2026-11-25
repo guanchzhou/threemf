@@ -44,6 +44,7 @@ static MDImporterInterfaceStruct sInterfaceFtbl = {
 };
 
 static MetadataImporterPlugin *AllocPlugin(CFUUIDRef factoryID) {
+    if (!factoryID) return NULL;
     MetadataImporterPlugin *plugin = (MetadataImporterPlugin *)malloc(sizeof(MetadataImporterPlugin));
     if (!plugin) return NULL;
     memset(plugin, 0, sizeof(MetadataImporterPlugin));
@@ -55,6 +56,7 @@ static MetadataImporterPlugin *AllocPlugin(CFUUIDRef factoryID) {
 }
 
 static void DeallocPlugin(MetadataImporterPlugin *self) {
+    if (!self) return;
     CFUUIDRef factoryID = self->factoryID;
     free(self);
     if (factoryID) {
@@ -64,7 +66,11 @@ static void DeallocPlugin(MetadataImporterPlugin *self) {
 }
 
 static HRESULT QueryInterface(void *self, REFIID iid, LPVOID *ppv) {
+    if (!ppv) return E_INVALIDARG;
+    *ppv = NULL;
+    if (!self) return E_INVALIDARG;
     CFUUIDRef interfaceID = CFUUIDCreateFromUUIDBytes(kCFAllocatorDefault, iid);
+    if (!interfaceID) return E_OUTOFMEMORY;
     if (CFEqual(interfaceID, kMDImporterInterfaceID) ||
         CFEqual(interfaceID, IUnknownUUID)) {
         ((MetadataImporterPlugin *)self)->conduitInterface->AddRef(self);
@@ -73,17 +79,18 @@ static HRESULT QueryInterface(void *self, REFIID iid, LPVOID *ppv) {
         return S_OK;
     }
     CFRelease(interfaceID);
-    *ppv = NULL;
     return E_NOINTERFACE;
 }
 
 static ULONG AddRef(void *self) {
+    if (!self) return 0;
     MetadataImporterPlugin *plugin = (MetadataImporterPlugin *)self;
     // fetch_add returns the previous value; new count is +1.
     return (ULONG)(atomic_fetch_add(&plugin->refCount, 1) + 1);
 }
 
 static ULONG Release(void *self) {
+    if (!self) return 0;
     MetadataImporterPlugin *plugin = (MetadataImporterPlugin *)self;
     unsigned previous = atomic_fetch_sub(&plugin->refCount, 1);
     if (previous == 1) {
@@ -96,8 +103,10 @@ static ULONG Release(void *self) {
 // Exported factory entry. Spotlight (mdworker) calls this when loading the bundle.
 void *MetadataImporterPluginFactory(CFAllocatorRef allocator, CFUUIDRef typeID) {
     (void)allocator;
+    if (!typeID) return NULL;
     if (CFEqual(typeID, kMDImporterTypeID)) {
         CFUUIDRef uuid = CFUUIDCreateFromString(kCFAllocatorDefault, CFSTR(PLUGIN_ID));
+        if (!uuid) return NULL;
         MetadataImporterPlugin *plugin = AllocPlugin(uuid);
         CFRelease(uuid);
         return plugin;

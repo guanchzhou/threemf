@@ -161,4 +161,13 @@ final class ThumbnailCacheTests: XCTestCase {
             XCTAssertEqual(ThumbnailCache.testDirectoryScanCount, 1)
         }
     }
+
+    func testMillisecondsKey_guardsExtremeDatesWithoutTrapping() {
+        XCTAssertNil(ThumbnailCache.millisecondsKey(for: Date(timeIntervalSince1970: 1e20)))
+        XCTAssertNil(ThumbnailCache.millisecondsKey(for: Date(timeIntervalSince1970: -1e20)))
+        XCTAssertEqual(
+            ThumbnailCache.millisecondsKey(for: Date(timeIntervalSince1970: 1_700_000_000.250)),
+            1_700_000_000_250
+        )
+    }
 }

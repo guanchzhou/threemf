@@ -236,7 +236,9 @@ public enum GCodeParser {
                 var cmdNum = 0
                 if p < endOfCode, base[p] >= 0x31, base[p] <= 0x39 {
                     while p < endOfCode, base[p] >= 0x30, base[p] <= 0x39 {
-                        cmdNum = cmdNum * 10 + Int(base[p] - 0x30)
+                        if cmdNum <= 9999 {
+                            cmdNum = cmdNum * 10 + Int(base[p] - 0x30)
+                        }
                         p += 1
                     }
                 } else if sawZero {
@@ -447,6 +449,8 @@ public enum GCodeParser {
                     continue
                 }
 
+                guard center.x.isFinite, center.y.isFinite else { continue }
+
                 let radiusVec = startXY - center
                 let arcRadius = simd_length(radiusVec)
                 guard arcRadius > 1e-8, arcRadius.isFinite else { continue }
@@ -467,9 +471,9 @@ public enum GCodeParser {
                     }
                 }
 
-                let arcLength = abs(arcRadius * sweep)
-                var nSeg = max(1, Int(ceil(Double(arcLength / arcChordMM))))
-                nSeg = min(nSeg, maxSegmentsPerArc)
+                let rawSegs = ceil(abs(Double(arcRadius) * Double(sweep)) / Double(arcChordMM))
+                guard rawSegs.isFinite else { continue }
+                var nSeg = max(1, Int(min(rawSegs, Double(maxSegmentsPerArc))))
                 if downsampleBudget == nil {
                     let remaining = max(1, limits.maxGCodeSegments - segments.count)
                     nSeg = min(nSeg, remaining)
@@ -580,7 +584,9 @@ public enum GCodeParser {
             }
             var exp = 0
             while i < end, base[i] >= 0x30, base[i] <= 0x39 {
-                exp = exp * 10 + Int(base[i] - 0x30)
+                if exp <= 400 {
+                    exp = exp * 10 + Int(base[i] - 0x30)
+                }
                 i += 1
             }
             result *= pow(10.0, Double(expNeg ? -exp : exp))

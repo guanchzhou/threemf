@@ -228,13 +228,12 @@ jobs:
 
             app "threemf.app"
 
-            # Remove any unmanaged /Applications/threemf.app left behind by manual installs
-            # (drag-and-drop from a release zip, local xcodebuild output, etc.) so the
-            # subsequent install step doesn't error with "It seems there is already an App at…".
-            # On a clean upgrade flow this is a no-op because brew has already uninstalled.
-            preflight_steps do
-              remove "threemf.app", base: :appdir, recursive: true
-            end
+            uninstall quit: [
+              "com.andreymaltsev.3mf-quicklook",
+              "com.andreymaltsev.3mf-quicklook.findersync",
+              "com.andreymaltsev.3mf-quicklook.preview",
+              "com.andreymaltsev.3mf-quicklook.thumbnail",
+            ]
 
             zap trash: [
               "~/Library/Application Scripts/com.andreymaltsev.3mf-quicklook",
@@ -242,11 +241,14 @@ jobs:
               "~/Library/Application Scripts/com.andreymaltsev.3mf-quicklook.mdimporter",
               "~/Library/Application Scripts/com.andreymaltsev.3mf-quicklook.preview",
               "~/Library/Application Scripts/com.andreymaltsev.3mf-quicklook.thumbnail",
+              "~/Library/Caches/com.andreymaltsev.3mf-quicklook",
               "~/Library/Containers/com.andreymaltsev.3mf-quicklook",
               "~/Library/Containers/com.andreymaltsev.3mf-quicklook.findersync",
               "~/Library/Containers/com.andreymaltsev.3mf-quicklook.mdimporter",
               "~/Library/Containers/com.andreymaltsev.3mf-quicklook.preview",
               "~/Library/Containers/com.andreymaltsev.3mf-quicklook.thumbnail",
+              "~/Library/Preferences/com.andreymaltsev.3mf-quicklook.plist",
+              "~/Library/Saved Application State/com.andreymaltsev.3mf-quicklook.savedState",
             ]
           end
           CASK
@@ -257,11 +259,12 @@ jobs:
           git diff --cached --quiet || git commit -m "Update threemf to v${VERSION}"
           git push
 
-      - name: Cleanup keychain
+      - name: Cleanup temporary files
         if: always()
         run: |
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
           rm -f "$RUNNER_TEMP/certificate.p12"
+          rm -rf /tmp/homebrew-tap
 
   # Job 3: SLSA provenance (isolated, non-forgeable)
   provenance:

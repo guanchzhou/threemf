@@ -404,9 +404,9 @@ class STLParserTests: XCTestCase {
     // MARK: - Crafted-coordinate crash guards (regression: Int32(Float) trap)
 
     func testParseBinarySTL_nonFiniteCoords_doesNotTrap() throws {
-        // A binary triangle carrying NaN and ±Inf coordinates. Before the quantize guard,
-        // VertexKey's `Int32(Float)` cast fatal-errored on NaN/Inf — crashing the extension.
-        let data = makeBinarySTL(triangles: [
+        // A binary triangle carrying NaN and ±Inf coordinates must be rejected rather than trapping
+        // or poisoning the mesh with non-finite vertices.
+        let nonFiniteOnly = makeBinarySTL(triangles: [
             Triangle(
                 normal: (0, 0, 1),
                 v1: (.nan, 0, 0),
@@ -414,12 +414,46 @@ class STLParserTests: XCTestCase {
                 v3: (-.infinity, 0, 1)
             ),
         ])
-        let url = try writeTempFile(data: data, ext: "stl")
-        defer { try? FileManager.default.removeItem(at: url) }
+        let urlOnly = try writeTempFile(data: nonFiniteOnly, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: urlOnly) }
 
-        // Contract is "no trap": it parses (degenerate coords collapse) or throws — never crashes.
-        let mesh = try STLParser.parseMesh(from: url)
-        XCTAssertGreaterThan(mesh.vertices.count, 0)
+        XCTAssertThrowsError(try STLParser.parseMesh(from: urlOnly)) { error in
+            XCTAssertEqual(error as? STLParserError, .noTriangles)
+        }
+
+        // Mixed finite + non-finite triangles: non-finite triangle is dropped, finite triangle kept.
+        let mixed = makeBinarySTL(triangles: [
+            Triangle(normal: (0, 0, 1), v1: (.nan, 0, 0), v2: (1, 0, 0), v3: (0, 1, 0)),
+            Triangle(normal: (0, 0, 1), v1: (0, 0, 0), v2: (1, 0, 0), v3: (0, 1, 0)),
+        ])
+        let urlMixed = try writeTempFile(data: mixed, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: urlMixed) }
+
+        let mesh = try STLParser.parseMesh(from: urlMixed)
+        XCTAssertEqual(mesh.indices.count, 3)
+        XCTAssertTrue(mesh.vertices.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite })
+    }
+
+    func testParseBinarySTLParallel_rejectsNonFiniteTriangles() throws {
+        // Exercises parseBinaryParallel directly with a mix of finite and non-finite triangles.
+        let triCount = 60_000
+        var tris: [Triangle] = []
+        tris.reserveCapacity(triCount)
+        tris.append(Triangle(normal: (0, 0, 1), v1: (.nan, 0, 0), v2: (1, 0, 0), v3: (0, 1, 0)))
+        tris.append(Triangle(normal: (0, 0, 1), v1: (.infinity, 0, 0), v2: (1, 0, 0), v3: (0, 1, 0)))
+        for i in 2 ..< triCount {
+            let x = Float(i)
+            tris.append(Triangle(normal: (0, 0, 1), v1: (x, 0, 0), v2: (x + 1, 0, 0), v3: (x, 1, 0)))
+        }
+        let data = makeBinarySTL(triangles: tris)
+        let mesh = try STLParser.parseBinaryParallel(
+            data: data,
+            triangleCount: triCount,
+            computesNormals: false
+        )
+        XCTAssertNil(mesh.normals)
+        XCTAssertEqual(mesh.indices.count, (triCount - 2) * 3)
+        XCTAssertTrue(mesh.vertices.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite })
     }
 
     func testParseBinarySTL_hugeFiniteCoords_doesNotTrap() throws {
@@ -436,12 +470,20 @@ class STLParserTests: XCTestCase {
     }
 
     func testParseASCIISTL_overflowExponent_doesNotTrap() throws {
-        // `1e999` overflows Float to +Inf in parseFloatBytes; the vertex key must not trap.
+        // `1e9999999999999999999999` overflows Float to +Inf without signed-Int exponent trap,
+        // and the non-finite triangle is rejected while valid finite triangles survive.
         let ascii = """
         solid overflow
           facet normal 0 0 1
             outer loop
-              vertex 1e999 0 0
+              vertex 1e9999999999999999999999 0 0
+              vertex 1 0 0
+              vertex 0 1 0
+            endloop
+          endfacet
+          facet normal 0 0 1
+            outer loop
+              vertex 1e-9999999999999999999999 0 0
               vertex 1 0 0
               vertex 0 1 0
             endloop
@@ -451,7 +493,21 @@ class STLParserTests: XCTestCase {
         let url = try writeTempFile(string: ascii, ext: "stl")
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let mesh = try STLParser.parseMesh(from: url)
+        let mesh = try STLParser.parseMesh(from: url, computesNormals: false)
+        XCTAssertNil(mesh.normals)
+        XCTAssertEqual(mesh.indices.count, 3)
+        XCTAssertTrue(mesh.vertices.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite })
+    }
+
+    func testParseBinarySTL_computesNormalsFalse_skipsNormals() throws {
+        let data = makeBinarySTL(triangles: [
+            Triangle(normal: (0, 0, 1), v1: (0, 0, 0), v2: (1, 0, 0), v3: (0, 1, 0)),
+        ])
+        let url = try writeTempFile(data: data, ext: "stl")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let mesh = try STLParser.parseMesh(from: url, computesNormals: false)
+        XCTAssertNil(mesh.normals)
         XCTAssertEqual(mesh.indices.count, 3)
     }
 

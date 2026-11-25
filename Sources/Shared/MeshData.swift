@@ -230,6 +230,28 @@ public struct MeshData: Sendable {
         return sub
     }
 
+    /// Maximum scratch memory for per-chunk normal accumulators (32 MB).
+    static let maxNormalScratchBytes = 32 * 1024 * 1024
+
+    /// Computes how many parallel chunks fit inside `maxScratchBytes` for `vertexCount` vertices,
+    /// using overflow-safe arithmetic. Returns `1` when parallel scratch would exceed the budget.
+    static func parallelNormalChunkCount(
+        vertexCount: Int,
+        triangleCount: Int,
+        processorCount: Int = ProcessInfo.processInfo.activeProcessorCount,
+        maxScratchBytes: Int = maxNormalScratchBytes
+    ) -> Int {
+        guard vertexCount > 0, triangleCount >= 50000, maxScratchBytes > 0 else { return 1 }
+        let stride = MemoryLayout<simd_float3>.stride
+        let (bytesPerChunk, overflow) = vertexCount.multipliedReportingOverflow(by: stride)
+        guard !overflow, bytesPerChunk > 0 else { return 1 }
+        let budgetChunks = maxScratchBytes / bytesPerChunk
+        guard budgetChunks > 1 else { return 1 }
+        let cores = max(1, processorCount)
+        let desired = min(cores * 2, max(1, triangleCount / 25000))
+        return min(desired, budgetChunks)
+    }
+
     /// Computes per-vertex normals by accumulating face normals.
     /// Parallelizes across CPU cores using per-thread scratch buffers and a final reduce.
     public mutating func computeNormals(
@@ -244,14 +266,17 @@ public struct MeshData: Sendable {
             return
         }
 
-        // Single-threaded path for small meshes — parallel overhead isn't worth it.
-        if totalTriangles < 50000 {
+        let chunks = Self.parallelNormalChunkCount(
+            vertexCount: count,
+            triangleCount: totalTriangles
+        )
+        let (total, totalOverflow) = chunks.multipliedReportingOverflow(by: count)
+
+        // Single-threaded path for small meshes or when scratch memory would exceed budget.
+        if chunks <= 1 || totalOverflow || total <= 0 {
             normals = try computeNormalsSerial(progress: progress, cancellation: cancellation)
             return
         }
-
-        let cores = max(1, ProcessInfo.processInfo.activeProcessorCount)
-        let chunks = min(cores * 2, max(1, totalTriangles / 25000))
 
         // Hoist into immutable locals so the concurrent block doesn't capture inout self.
         // Arrays are COW — these are zero-copy references to the same storage.
@@ -264,7 +289,6 @@ public struct MeshData: Sendable {
         // Per-chunk scratch as a flat raw allocation. Each chunk writes to a disjoint
         // [chunkIdx * count, (chunkIdx + 1) * count) range, so the captured base
         // pointer is safe to share across threads even though the compiler can't prove it.
-        let total = chunks * count
         let flat = UnsafeMutablePointer<simd_float3>.allocate(capacity: total)
         flat.initialize(repeating: .zero, count: total)
         defer {

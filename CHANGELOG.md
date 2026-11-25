@@ -4,8 +4,20 @@ All notable changes to threemf are documented here. Format: Keep a Changelog. Ve
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-11-25
+
+### Security
+- **Bounded normal computation and archive extraction buffers**: `computeNormals` caps its scratch allocation at 32 MB, `extractCapped` caps initial buffer pre-allocation at 4 MB, and `ThreeMFExtractor` enforces a 24 MB aggregate thumbnail decompression budget with cancellation polling across both `ThreeMFExtractor` and `nsxmlFallback`.
+- **Saturated and clamped numeric parsing**: exponent and command-number parsers in 3MF, STL, and G-code saturate instead of overflowing; G-code arc linearization and `BambuPlateInfo` clamp float-to-int conversions; and mesh assembly guards `UInt32`/`Int` additions against overflow and rejects non-finite vertices and transforms.
+- **POSIX bounded file reads and fail-closed checks**: `BoundedFileReader` uses POSIX `open`, `fstat`, and `read` instead of `.mappedIfSafe`; `ThumbnailProvider.fileSizeBytes` fails closed on lookup errors; `ThumbnailCache` guards against extreme `mtime` values; and `MetadataImporter.c` checks for `NULL` pointers.
+- **Release cask template sync**: synced the Homebrew cask template with the hardened uninstall and zap configuration.
+
 ### Fixed
 - **Finder thumbnails from embedded PNGs were drawn at a quarter of their size**: `renderImageThumbnail` sized the reply in pixels but the Quick Look drawing context is in backing pixels while `contextSize` is in points, so on a Retina display the model sat in the bottom-left corner of the icon. The reply is now sized in points and drawn into `contextSize × request.scale`.
+
+### Performance
+- **Faster SceneKit geometry assembly**: `SceneBuilder` discovers active materials with `Set<Int>` and groups triangle indices without intermediate allocations.
+- **Skip unused normal computation and redundant archive opens**: Spotlight and CLI STL parsing pass `computesNormals: false`, and `ThumbnailProvider` reuses an already-opened `ThreeMFArchive`.
 
 ## [1.6.2] - 2026-10-25
 

@@ -939,4 +939,212 @@ class ThreeMFMeshParserTests: XCTestCase {
         XCTAssertEqual(mesh.boundingBox.max.x, 2, accuracy: 0.001)
         XCTAssertEqual(mesh.boundingBox.max.z, 5, accuracy: 0.001)
     }
+
+    // MARK: - Overflow, non-finite, and scanner cap hardening
+
+    func testParse3MF_extremeExponentAndNonFiniteVertices_doNotTrap() throws {
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+          <resources>
+            <object id="1" type="model">
+              <mesh>
+                <vertices>
+                  <vertex x="1e9999999999999999999999" y="0" z="0" />
+                  <vertex x="1e-9999999999999999999999" y="0" z="0" />
+                  <vertex x="1" y="0" z="0" />
+                  <vertex x="0" y="1" z="0" />
+                </vertices>
+                <triangles>
+                  <triangle v1="0" v2="1" v3="2" />
+                </triangles>
+              </mesh>
+            </object>
+          </resources>
+          <build><item objectid="1" /></build>
+        </model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Vertex 0 is rejected (non-finite), leaving 3 finite vertices (0, 1, 2).
+        let mesh = try ThreeMFMeshParser.parseMesh(from: url)
+        XCTAssertEqual(mesh.vertices.count, 3)
+        XCTAssertEqual(mesh.indices.count, 3)
+        XCTAssertTrue(mesh.vertices.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite })
+    }
+
+    func testParse3MF_uint32IndexOverflowAndCrossObjectOutOfRange_doNotTrapOrAlias() throws {
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+          <resources>
+            <object id="1" type="model">
+              <mesh>
+                <vertices>
+                  <vertex x="0" y="0" z="0" />
+                  <vertex x="1" y="0" z="0" />
+                  <vertex x="0" y="1" z="0" />
+                </vertices>
+                <triangles>
+                  <triangle v1="0" v2="1" v3="2" />
+                  <triangle v1="0" v2="1" v3="4" />
+                </triangles>
+              </mesh>
+            </object>
+            <object id="2" type="model">
+              <mesh>
+                <vertices>
+                  <vertex x="0" y="0" z="5" />
+                  <vertex x="2" y="0" z="5" />
+                  <vertex x="0" y="2" z="5" />
+                </vertices>
+                <triangles>
+                  <triangle v1="4294967295" v2="0" v3="1" />
+                  <triangle v1="0" v2="1" v3="2" />
+                </triangles>
+              </mesh>
+            </object>
+          </resources>
+          <build>
+            <item objectid="1" />
+            <item objectid="2" />
+          </build>
+        </model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Only the 1 valid triangle from object 1 and 1 valid triangle from object 2 survive.
+        let mesh = try ThreeMFMeshParser.parseMesh(from: url)
+        XCTAssertEqual(mesh.vertices.count, 6)
+        XCTAssertEqual(mesh.indices.count, 6)
+    }
+
+    func testParse3MF_hugePindexAndNonZeroMaterialRange_doesNotTrap() throws {
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+          <resources>
+            <basematerials id="1">
+              <base name="Red" displaycolor="#FF0000" />
+            </basematerials>
+            <basematerials id="2">
+              <base name="Blue" displaycolor="#0000FF" />
+            </basematerials>
+            <object id="10" type="model" pid="2" pindex="9223372036854775807">
+              <mesh>
+                <vertices>
+                  <vertex x="0" y="0" z="0" />
+                  <vertex x="1" y="0" z="0" />
+                  <vertex x="0" y="1" z="0" />
+                </vertices>
+                <triangles>
+                  <triangle v1="0" v2="1" v3="2" />
+                  <triangle v1="0" v2="1" v3="2" pid="2" p1="0" />
+                </triangles>
+              </mesh>
+            </object>
+          </resources>
+          <build><item objectid="10" /></build>
+        </model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let mesh = try ThreeMFMeshParser.parseMesh(from: url)
+        XCTAssertEqual(mesh.indices.count, 6)
+        // Triangle 0 inherits out-of-range Int.max pindex -> default (-1) without Int overflow;
+        // Triangle 1 uses valid pid="2" p1="0" -> material index 1.
+        XCTAssertEqual(mesh.triangleMaterials, [-1, 1])
+    }
+
+    func testParse3MF_overflowComposedTransform_rejectsNonFiniteVertices() throws {
+        // Each individual transform uses 1e5 (< 1e6 cap in parseTransformString),
+        // while composing 8 nested levels produces (1e5)^8 = 1e40 -> overflows Float to +Inf.
+        var nested = ""
+        for id in 2 ... 8 {
+            nested += """
+                <object id="\(id)" type="model">
+                  <components>
+                    <component objectid="\(id - 1)" transform="100000 0 0 0 100000 0 0 0 100000 0 0 0" />
+                  </components>
+                </object>
+            """
+        }
+        let modelXML = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">
+          <resources>
+            <object id="1" type="model">
+              <mesh>
+                <vertices>
+                  <vertex x="1" y="1" z="1" />
+                  <vertex x="2" y="1" z="1" />
+                  <vertex x="1" y="2" z="1" />
+                </vertices>
+                <triangles><triangle v1="0" v2="1" v3="2" /></triangles>
+              </mesh>
+            </object>
+            \(nested)
+          </resources>
+          <build>
+            <item objectid="8" transform="100000 0 0 0 100000 0 0 0 100000 0 0 0" />
+          </build>
+        </model>
+        """
+        let url = try make3MFFile(modelXML: modelXML)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        XCTAssertThrowsError(try ThreeMFMeshParser.parseMesh(from: url)) { error in
+            XCTAssertEqual(error as? ThreeMFMeshParserError, .noMeshData)
+        }
+    }
+
+    func testFastMeshScanner_capsMaterialsAndMetadataOther() {
+        var xml = "<model>"
+        let longVal = String(repeating: "A", count: ThreeMFMeshParser.maxMetadataStringLength + 500)
+        for i in 0 ..< ThreeMFMeshParser.maxMetadataOtherEntries + 40 {
+            xml += "<metadata name=\"Custom\(i)\">\(longVal)</metadata>"
+        }
+        xml += "<resources><basematerials id=\"1\">"
+        for i in 0 ..< ThreeMFMeshParser.maxMaterials + 50 {
+            xml += "<base name=\"M\(i)\" displaycolor=\"#112233\" />"
+        }
+        xml += "</basematerials></resources></model>"
+
+        let result = FastMeshScanner.scan(Data(xml.utf8), limits: .quickLook)
+        XCTAssertEqual(result.materials.count, ThreeMFMeshParser.maxMaterials)
+        XCTAssertEqual(result.metadata.other.count, ThreeMFMeshParser.maxMetadataOtherEntries)
+        XCTAssertTrue(result.metadata.other.values.allSatisfy { $0.count <= ThreeMFMeshParser.maxMetadataStringLength })
+    }
+
+    func testSceneBuilder_multiMaterialOrderingMatchesSortedUniqueMaterialIDs() {
+        let vertices: [SIMD3<Float>] = [
+            SIMD3(0, 0, 0), SIMD3(1, 0, 0), SIMD3(0, 1, 0),
+            SIMD3(2, 0, 0), SIMD3(3, 0, 0), SIMD3(2, 1, 0),
+            SIMD3(4, 0, 0), SIMD3(5, 0, 0), SIMD3(4, 1, 0),
+            SIMD3(6, 0, 0), SIMD3(7, 0, 0), SIMD3(6, 1, 0),
+        ]
+        let indices: [UInt32] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        let materials = [
+            BaseMaterial(name: "M0", color: SIMD4(1, 0, 0, 1)),
+            BaseMaterial(name: "M1", color: SIMD4(0, 1, 0, 1)),
+            BaseMaterial(name: "M2", color: SIMD4(0, 0, 1, 1)),
+        ]
+        // Unsorted material IDs: 2, -1, 0, 2
+        let mesh = MeshData(
+            vertices: vertices,
+            indices: indices,
+            materials: materials,
+            triangleMaterials: [2, -1, 0, 2]
+        )
+        let scene = SceneBuilder.buildScene(from: mesh)
+        let modelNode = scene.rootNode.childNode(withName: "model", recursively: true)
+        let geometry = modelNode?.geometry
+        // Unique IDs sorted ascending: [-1, 0, 2] -> 3 elements (1, 1, 2 triangles).
+        XCTAssertEqual(geometry?.elements.count, 3)
+        XCTAssertEqual(geometry?.elements.map { $0.primitiveCount }, [1, 1, 2])
+        XCTAssertEqual(geometry?.materials.count, 3)
+    }
 }

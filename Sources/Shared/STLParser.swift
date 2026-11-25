@@ -27,7 +27,8 @@ public enum STLParser {
     public static func parseMesh(
         from fileURL: URL,
         limits: ResourceLimits = .cli,
-        cancellation: ParseCancellation? = nil
+        cancellation: ParseCancellation? = nil,
+        computesNormals: Bool = true
     ) throws -> MeshData {
         let data: Data
         do {
@@ -35,16 +36,27 @@ public enum STLParser {
         } catch BoundedFileReader.ReadError.fileTooLarge {
             throw STLParserError.fileTooLarge
         }
-        return try parseMesh(data: data, limits: limits, cancellation: cancellation)
+        return try parseMesh(
+            data: data,
+            limits: limits,
+            cancellation: cancellation,
+            computesNormals: computesNormals
+        )
     }
 
     static func parseMesh(
         data: Data,
         limits: ResourceLimits,
-        cancellation: ParseCancellation? = nil
+        cancellation: ParseCancellation? = nil,
+        computesNormals: Bool = true
     ) throws -> MeshData {
         guard data.count > 84 else {
-            return try parseASCII(data: data, limits: limits, cancellation: cancellation)
+            return try parseASCII(
+                data: data,
+                limits: limits,
+                cancellation: cancellation,
+                computesNormals: computesNormals
+            )
         }
 
         // Standard STL detection: ASCII files begin with `solid `. The pure size-based
@@ -56,7 +68,12 @@ public enum STLParser {
         let startsWithSolid = data.starts(with: [0x73, 0x6F, 0x6C, 0x69, 0x64]) // "solid"
         if startsWithSolid {
             do {
-                return try parseASCII(data: data, limits: limits, cancellation: cancellation)
+                return try parseASCII(
+                    data: data,
+                    limits: limits,
+                    cancellation: cancellation,
+                    computesNormals: computesNormals
+                )
             } catch is CancellationError {
                 // Cancellation is not a parse failure — never fall through to the binary
                 // path, or a cancelled preview would start a second full parse.
@@ -77,10 +94,16 @@ public enum STLParser {
                 data: data,
                 triangleCount: Int(triangleCount),
                 limits: limits,
-                cancellation: cancellation
+                cancellation: cancellation,
+                computesNormals: computesNormals
             )
         } else {
-            return try parseASCII(data: data, limits: limits, cancellation: cancellation)
+            return try parseASCII(
+                data: data,
+                limits: limits,
+                cancellation: cancellation,
+                computesNormals: computesNormals
+            )
         }
     }
 
@@ -92,7 +115,8 @@ public enum STLParser {
         data: Data,
         triangleCount: Int,
         limits: ResourceLimits,
-        cancellation: ParseCancellation?
+        cancellation: ParseCancellation?,
+        computesNormals: Bool
     ) throws -> MeshData {
         guard triangleCount > 0 else { throw STLParserError.noTriangles }
         let clampedCount = min(triangleCount, limits.maxSTLTriangles)
@@ -102,14 +126,16 @@ public enum STLParser {
                 data: data,
                 triangleCount: clampedCount,
                 limits: limits,
-                cancellation: cancellation
+                cancellation: cancellation,
+                computesNormals: computesNormals
             )
         }
         return try parseBinarySerial(
             data: data,
             triangleCount: clampedCount,
             limits: limits,
-            cancellation: cancellation
+            cancellation: cancellation,
+            computesNormals: computesNormals
         )
     }
 
@@ -119,7 +145,8 @@ public enum STLParser {
         data: Data,
         triangleCount: Int,
         limits _: ResourceLimits = .cli,
-        cancellation: ParseCancellation? = nil
+        cancellation: ParseCancellation? = nil,
+        computesNormals: Bool = true
     ) throws -> MeshData {
         var vertices: [simd_float3] = []
         var indices: [UInt32] = []
@@ -136,12 +163,21 @@ public enum STLParser {
             for i in 0 ..< triangleCount {
                 try poller.tick()
                 let triOffset = 84 + i * 50 + 12 // skip header + normal
-                for v in 0 ..< 3 {
-                    let vOffset = triOffset + v * 12
-                    let x = raw.loadUnaligned(fromByteOffset: vOffset, as: Float.self)
-                    let y = raw.loadUnaligned(fromByteOffset: vOffset + 4, as: Float.self)
-                    let z = raw.loadUnaligned(fromByteOffset: vOffset + 8, as: Float.self)
+                let x0 = raw.loadUnaligned(fromByteOffset: triOffset, as: Float.self)
+                let y0 = raw.loadUnaligned(fromByteOffset: triOffset + 4, as: Float.self)
+                let z0 = raw.loadUnaligned(fromByteOffset: triOffset + 8, as: Float.self)
+                let x1 = raw.loadUnaligned(fromByteOffset: triOffset + 12, as: Float.self)
+                let y1 = raw.loadUnaligned(fromByteOffset: triOffset + 16, as: Float.self)
+                let z1 = raw.loadUnaligned(fromByteOffset: triOffset + 20, as: Float.self)
+                let x2 = raw.loadUnaligned(fromByteOffset: triOffset + 24, as: Float.self)
+                let y2 = raw.loadUnaligned(fromByteOffset: triOffset + 28, as: Float.self)
+                let z2 = raw.loadUnaligned(fromByteOffset: triOffset + 32, as: Float.self)
+                guard x0.isFinite, y0.isFinite, z0.isFinite,
+                      x1.isFinite, y1.isFinite, z1.isFinite,
+                      x2.isFinite, y2.isFinite, z2.isFinite
+                else { continue }
 
+                for (x, y, z) in [(x0, y0, z0), (x1, y1, z1), (x2, y2, z2)] {
                     let key = VertexKey(x: x, y: y, z: z)
                     if let existing = vertexMap[key] {
                         indices.append(existing)
@@ -155,8 +191,12 @@ public enum STLParser {
             }
         }
 
+        guard indices.count >= 3 else { throw STLParserError.noTriangles }
+
         var mesh = MeshData(vertices: vertices, indices: indices, normals: nil)
-        try mesh.computeNormals(cancellation: cancellation)
+        if computesNormals {
+            try mesh.computeNormals(cancellation: cancellation)
+        }
         return mesh
     }
 
@@ -168,7 +208,8 @@ public enum STLParser {
         data: Data,
         triangleCount: Int,
         limits: ResourceLimits = .cli,
-        cancellation: ParseCancellation? = nil
+        cancellation: ParseCancellation? = nil,
+        computesNormals: Bool = true
     ) throws -> MeshData {
         let cores = max(1, ProcessInfo.processInfo.activeProcessorCount)
         let chunks = min(cores * 2, max(1, triangleCount / 50000))
@@ -177,7 +218,8 @@ public enum STLParser {
                 data: data,
                 triangleCount: triangleCount,
                 limits: limits,
-                cancellation: cancellation
+                cancellation: cancellation,
+                computesNormals: computesNormals
             )
         }
 
@@ -205,11 +247,21 @@ public enum STLParser {
                         return
                     }
                     let triOffset = 84 + i * 50 + 12 // skip header + normal
-                    for v in 0 ..< 3 {
-                        let vOffset = triOffset + v * 12
-                        let x = raw.loadUnaligned(fromByteOffset: vOffset, as: Float.self)
-                        let y = raw.loadUnaligned(fromByteOffset: vOffset + 4, as: Float.self)
-                        let z = raw.loadUnaligned(fromByteOffset: vOffset + 8, as: Float.self)
+                    let x0 = raw.loadUnaligned(fromByteOffset: triOffset, as: Float.self)
+                    let y0 = raw.loadUnaligned(fromByteOffset: triOffset + 4, as: Float.self)
+                    let z0 = raw.loadUnaligned(fromByteOffset: triOffset + 8, as: Float.self)
+                    let x1 = raw.loadUnaligned(fromByteOffset: triOffset + 12, as: Float.self)
+                    let y1 = raw.loadUnaligned(fromByteOffset: triOffset + 16, as: Float.self)
+                    let z1 = raw.loadUnaligned(fromByteOffset: triOffset + 20, as: Float.self)
+                    let x2 = raw.loadUnaligned(fromByteOffset: triOffset + 24, as: Float.self)
+                    let y2 = raw.loadUnaligned(fromByteOffset: triOffset + 28, as: Float.self)
+                    let z2 = raw.loadUnaligned(fromByteOffset: triOffset + 32, as: Float.self)
+                    guard x0.isFinite, y0.isFinite, z0.isFinite,
+                          x1.isFinite, y1.isFinite, z1.isFinite,
+                          x2.isFinite, y2.isFinite, z2.isFinite
+                    else { continue }
+
+                    for (x, y, z) in [(x0, y0, z0), (x1, y1, z1), (x2, y2, z2)] {
                         let key = VertexKey(x: x, y: y, z: z)
                         if let existing = result.localMap[key] {
                             result.indices.append(existing)
@@ -258,8 +310,12 @@ public enum STLParser {
             }
         }
 
+        guard globalIndices.count >= 3 else { throw STLParserError.noTriangles }
+
         var mesh = MeshData(vertices: globalVertices, indices: globalIndices, normals: nil)
-        try mesh.computeNormals(cancellation: cancellation)
+        if computesNormals {
+            try mesh.computeNormals(cancellation: cancellation)
+        }
         return mesh
     }
 
@@ -268,7 +324,8 @@ public enum STLParser {
     private static func parseASCII(
         data: Data,
         limits: ResourceLimits,
-        cancellation: ParseCancellation?
+        cancellation: ParseCancellation?,
+        computesNormals: Bool
     ) throws -> MeshData {
         var vertices: [simd_float3] = []
         var indices: [UInt32] = []
@@ -281,6 +338,10 @@ public enum STLParser {
             let count = raw.count
             var pos = 0
             var poller = CancellationPoller(cancellation)
+            var pendingVerts: [simd_float3] = []
+            pendingVerts.reserveCapacity(3)
+            var pendingCount = 0
+            var pendingInvalid = false
 
             while pos < count {
                 try poller.tick()
@@ -303,20 +364,44 @@ public enum STLParser {
                         let x = parseFloatBytes(base: base, range: xRange)
                         let y = parseFloatBytes(base: base, range: yRange)
                         let z = parseFloatBytes(base: base, range: zRange)
-                        let key = VertexKey(x: x, y: y, z: z)
-                        if let existing = vertexMap[key] {
-                            indices.append(existing)
+                        pendingCount += 1
+                        if x.isFinite, y.isFinite, z.isFinite {
+                            pendingVerts.append(simd_float3(x, y, z))
                         } else {
-                            let idx = UInt32(vertices.count)
-                            vertexMap[key] = idx
-                            vertices.append(simd_float3(x, y, z))
-                            indices.append(idx)
+                            pendingInvalid = true
                         }
-                        // Bound aggregate triangle count under aggressive crafted input.
-                        if indices.count >= limits.maxSTLTriangles * 3 {
-                            break
+                        if pendingCount == 3 {
+                            if !pendingInvalid, pendingVerts.count == 3 {
+                                for v in pendingVerts {
+                                    let key = VertexKey(x: v.x, y: v.y, z: v.z)
+                                    if let existing = vertexMap[key] {
+                                        indices.append(existing)
+                                    } else {
+                                        let idx = UInt32(vertices.count)
+                                        vertexMap[key] = idx
+                                        vertices.append(v)
+                                        indices.append(idx)
+                                    }
+                                }
+                            }
+                            pendingVerts.removeAll(keepingCapacity: true)
+                            pendingCount = 0
+                            pendingInvalid = false
+                            // Bound aggregate triangle count under aggressive crafted input.
+                            if indices.count >= limits.maxSTLTriangles * 3 {
+                                break
+                            }
                         }
                     }
+                } else if pos + 7 <= count,
+                          base[pos] == 0x65, base[pos + 1] == 0x6E, base[pos + 2] == 0x64,
+                          base[pos + 3] == 0x6C, base[pos + 4] == 0x6F, base[pos + 5] == 0x6F,
+                          base[pos + 6] == 0x70
+                {
+                    // `endloop` — reset partial facet state so malformed loops don't shift alignment.
+                    pendingVerts.removeAll(keepingCapacity: true)
+                    pendingCount = 0
+                    pendingInvalid = false
                 }
                 // Advance to next newline.
                 while pos < count, base[pos] != 0x0A {
@@ -332,7 +417,9 @@ public enum STLParser {
         guard indices.count >= 3 else { throw STLParserError.noTriangles }
 
         var mesh = MeshData(vertices: vertices, indices: indices, normals: nil)
-        try mesh.computeNormals(cancellation: cancellation)
+        if computesNormals {
+            try mesh.computeNormals(cancellation: cancellation)
+        }
         return mesh
     }
 
@@ -406,7 +493,9 @@ public enum STLParser {
             }
             var exp = 0
             while i < end, base[i] >= 0x30, base[i] <= 0x39 {
-                exp = exp * 10 + Int(base[i] - 0x30)
+                if exp <= 400 {
+                    exp = exp * 10 + Int(base[i] - 0x30)
+                }
                 i += 1
             }
             result *= pow(10.0, Double(expNeg ? -exp : exp))

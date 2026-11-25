@@ -251,6 +251,52 @@ final class ArchiveHardeningTests: XCTestCase {
         XCTAssertFalse(ParseCancellation(timeout: 60).isCancelled)
     }
 
+    func testExtractThumbnail_aggregateBudgetCapsMultiCandidateDecompression() throws {
+        // First corrupt candidate consumes 4096 bytes of a 4100-byte aggregate budget,
+        // leaving only 4 bytes so both subsequent candidates exceed the remaining budget.
+        let junk = Data(repeating: 0x41, count: 4096)
+        let url = try writeStoredZip([
+            (path: "Metadata/plate_1.png", content: junk),
+            (path: "Metadata/plate_2.png", content: junk),
+            (path: "Metadata/plate_3.png", content: TestPNG.tiny1x1),
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let archive = try ThreeMFArchive(url: url)
+        XCTAssertThrowsError(
+            try ThreeMFExtractor.extractThumbnail(from: archive, aggregateByteBudget: 4100)
+        ) { error in
+            XCTAssertEqual(error as? ThreeMFExtractorError, .thumbnailTooLarge)
+        }
+    }
+
+    func testExtractThumbnail_preCancelledThrowsCancellationError() throws {
+        let url = try writeStoredZip([(path: "Metadata/plate_1.png", content: TestPNG.tiny1x1)])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let token = ParseCancellation()
+        token.cancel()
+        XCTAssertThrowsError(
+            try ThreeMFExtractor.extractThumbnail(from: url, cancellation: token)
+        ) { error in
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
+    func testExtractThumbnail_respectsLoweredFallbackCandidateCap() throws {
+        var entries: [(path: String, content: Data)] = (0 ..< ThreeMFExtractor.maxFallbackCandidates).map { i in
+            (path: "Metadata/bad_\(i).png", content: Data("not-a-png".utf8))
+        }
+        entries.append((path: "Metadata/z_valid.png", content: TestPNG.tiny1x1))
+        let url = try writeStoredZip(entries)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        XCTAssertEqual(ThreeMFExtractor.maxFallbackCandidates, 32)
+        XCTAssertThrowsError(try ThreeMFExtractor.extractThumbnail(from: url)) { error in
+            XCTAssertEqual(error as? ThreeMFExtractorError, .noThumbnailFound)
+        }
+    }
+
     // MARK: - Helpers
 
     /// Writes a stored (uncompressed) ZIP directly. ZIPFoundation rewrites the central

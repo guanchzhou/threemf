@@ -135,8 +135,18 @@ public enum ThumbnailCache {
         let pathHash = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
         // Milliseconds so two writes in the same second with different fractional
         // mtimes don't share a key.
-        let mtimeMs = Int((mtime.timeIntervalSince1970 * 1000).rounded())
+        guard let mtimeMs = millisecondsKey(for: mtime) else { return nil }
         return "\(pathHash)-\(size)-\(mtimeMs)"
+    }
+
+    /// Converts a timestamp to integer milliseconds since epoch, returning `nil` if the
+    /// scaled value is non-finite or outside `Int`'s representable range.
+    static func millisecondsKey(for date: Date) -> Int? {
+        let scaled = (date.timeIntervalSince1970 * 1000).rounded()
+        guard scaled.isFinite, scaled >= Double(Int.min), scaled < Double(Int.max) else {
+            return nil
+        }
+        return Int(scaled)
     }
 
     private static func resolvedMaxCacheBytes() -> Int {

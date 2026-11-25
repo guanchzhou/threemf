@@ -178,7 +178,7 @@ enum CLI {
             let format = try resolveFormat(file)
             switch format {
             case .gcode: _ = try GCodeParser.parse(from: file)
-            case .threemf, .stl: _ = try loadMesh(from: file, format: format)
+            case .threemf, .stl: _ = try loadMesh(from: file, format: format, computesNormals: false)
             }
             return ("PASS \(file.lastPathComponent)", false)
         } catch {
@@ -203,7 +203,7 @@ enum CLI {
                   segments: \(toolpath.segments.count)
                 """
             case .threemf, .stl:
-                let mesh = try loadMesh(from: file, format: format)
+                let mesh = try loadMesh(from: file, format: format, computesNormals: false)
                 payload = """
                 PASS \(file.lastPathComponent)
                   format: \(format.rawValue)
@@ -288,7 +288,7 @@ enum CLI {
                 metadata: nil
             )
         case .threemf, .stl:
-            let mesh = try loadMesh(from: file, format: format)
+            let mesh = try loadMesh(from: file, format: format, computesNormals: false)
             let bbox = mesh.boundingBox
             return InfoPayload(
                 format: format.rawValue,
@@ -416,12 +416,16 @@ enum CLI {
         }
     }
 
-    static func loadMesh(from url: URL, format: FileFormat) throws -> MeshData {
+    static func loadMesh(
+        from url: URL,
+        format: FileFormat,
+        computesNormals: Bool = true
+    ) throws -> MeshData {
         switch format {
         case .threemf:
-            try ThreeMFMeshParser.parseMesh(from: url)
+            try ThreeMFMeshParser.parseMesh(from: url, computesNormals: computesNormals)
         case .stl:
-            try STLParser.parseMesh(from: url)
+            try STLParser.parseMesh(from: url, computesNormals: computesNormals)
         case .gcode:
             // G-code is line-segment-oriented, not triangle-oriented. Callers should
             // route to `GCodeParser.parse(from:)` directly when format is .gcode.

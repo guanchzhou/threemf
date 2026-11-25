@@ -1,6 +1,7 @@
 import os
 import simd
 import XCTest
+import ZIPFoundation
 #if canImport(ThreeMFCore)
     @testable import ThreeMFCore
 #endif
@@ -118,6 +119,44 @@ final class ParseCancellationTests: XCTestCase {
         token.cancel()
 
         XCTAssertThrowsError(try mesh.computeNormals(cancellation: token)) { error in
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
+    func testThreeMF_nsxmlFallbackPreCancelledThrows() throws {
+        // XML without <object> or <build> bypasses FastMeshScanner's object map and reaches nsxmlFallback.
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <model><mesh><vertices>
+          <vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/>
+        </vertices><triangles><triangle v1="0" v2="1" v3="2"/></triangles></mesh></model>
+        """
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cancel-nsxml-\(UUID().uuidString)")
+            .appendingPathExtension("3mf")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let archive = try Archive(url: url, accessMode: .create, pathEncoding: nil)
+        let data = Data(xml.utf8)
+        try archive.addEntry(
+            with: "3D/3dmodel.model",
+            type: .file,
+            uncompressedSize: Int64(data.count),
+            provider: { position, size in
+                let start = Int(position)
+                return data.subdata(in: start ..< start + size)
+            }
+        )
+        // Uncancelled succeeds via nsxmlFallback.
+        let uncancelled = try ThreeMFMeshParser.parseMesh(from: url, computesNormals: false)
+        XCTAssertEqual(uncancelled.vertices.count, 3)
+
+        // Cancelled throws CancellationError instead of running XMLParser.
+        let token = ParseCancellation()
+        token.cancel()
+        XCTAssertThrowsError(
+            try ThreeMFMeshParser.parseMesh(from: url, cancellation: token, computesNormals: false)
+        ) { error in
             XCTAssertTrue(error is CancellationError)
         }
     }

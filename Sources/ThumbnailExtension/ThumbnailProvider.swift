@@ -48,11 +48,13 @@ class ThumbnailProvider: QLThumbnailProvider {
         request: QLFileThumbnailRequest,
         handler: @escaping (QLThumbnailReply?, Error?) -> Void
     ) {
-        let fileSize = fileSizeBytes(for: request.fileURL)
         // 200 MB is well above typical (10–50 MB), but a 500 MB pathological file
         // should still skip thumbnailing — the parse cost outweighs the benefit.
-        if fileSize > 200 * 1024 * 1024 {
-            log.debug("Skipping G-code render for huge file (\(fileSize) bytes)")
+        // Fail closed when file size cannot be read.
+        guard let fileSize = fileSizeBytes(for: request.fileURL),
+              fileSize <= 200 * 1024 * 1024
+        else {
+            log.debug("Skipping G-code render for unreadable or huge file")
             handler(nil, nil)
             return
         }
@@ -94,8 +96,18 @@ class ThumbnailProvider: QLThumbnailProvider {
         request: QLFileThumbnailRequest,
         handler: @escaping (QLThumbnailReply?, Error?) -> Void
     ) {
+        let cancellation = ParseCancellation(timeout: Self.parseTimeout)
+        let archive: ThreeMFArchive
+        do {
+            archive = try ThreeMFArchive(url: request.fileURL)
+        } catch {
+            log.error("Cannot open 3MF archive for thumbnail: \(error.localizedDescription, privacy: .public)")
+            handler(nil, ThreeMFExtractorError.cannotOpenArchive)
+            return
+        }
+
         // Try embedded PNG first (fast).
-        if let imageData = try? ThreeMFExtractor.extractThumbnail(from: request.fileURL),
+        if let imageData = try? ThreeMFExtractor.extractThumbnail(from: archive, cancellation: cancellation),
            let image = decodedThumbnail(imageData, request: request)
         {
             // Cache the raw PNG so subsequent previews skip the ZIP walk.
@@ -104,20 +116,21 @@ class ThumbnailProvider: QLThumbnailProvider {
             return
         }
 
-        // No embedded PNG — fall back to a 3D render. Skip render for huge files
-        // (sandbox-safe: just stat the file and let Finder use a generic icon).
-        let fileSize = fileSizeBytes(for: request.fileURL)
-        if fileSize > Self.huge3MFNoEmbedThresholdBytes {
-            log.debug("Skipping 3D render for huge 3MF (\(fileSize) bytes)")
+        // No embedded PNG — fall back to a 3D render. Skip render for huge or unreadable files
+        // (fail closed: let Finder use a generic icon).
+        guard let fileSize = fileSizeBytes(for: request.fileURL),
+              fileSize <= Self.huge3MFNoEmbedThresholdBytes
+        else {
+            log.debug("Skipping 3D render for unreadable or huge 3MF")
             handler(nil, nil)
             return
         }
 
         do {
             let mesh = try ThreeMFMeshParser.parseMesh(
-                from: request.fileURL,
+                from: archive,
                 limits: .quickLook,
-                cancellation: ParseCancellation(timeout: Self.parseTimeout)
+                cancellation: cancellation
             )
             renderSceneThumbnail(mesh: mesh, request: request, handler: handler)
         } catch {
@@ -130,9 +143,10 @@ class ThumbnailProvider: QLThumbnailProvider {
         request: QLFileThumbnailRequest,
         handler: @escaping (QLThumbnailReply?, Error?) -> Void
     ) {
-        let fileSize = fileSizeBytes(for: request.fileURL)
-        if fileSize > Self.hugeSTLThresholdBytes {
-            log.debug("Skipping 3D render for huge STL (\(fileSize) bytes)")
+        guard let fileSize = fileSizeBytes(for: request.fileURL),
+              fileSize <= Self.hugeSTLThresholdBytes
+        else {
+            log.debug("Skipping 3D render for unreadable or huge STL")
             handler(nil, nil)
             return
         }
@@ -216,9 +230,9 @@ class ThumbnailProvider: QLThumbnailProvider {
         handler(reply, nil)
     }
 
-    private func fileSizeBytes(for url: URL) -> Int64 {
+    private func fileSizeBytes(for url: URL) -> Int64? {
         guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else {
-            return 0
+            return nil
         }
         return Int64(size)
     }

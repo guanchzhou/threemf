@@ -47,6 +47,15 @@ public enum ThreeMFMeshParser {
     static let maxComponents = 10000
     static let maxBuildItems = 10000
 
+    /// Caps on `<basematerials>` entries and `<metadata>` side entries collected by `FastMeshScanner`.
+    static let maxMaterials = 4096
+    static let maxMetadataOtherEntries = 256
+    static let maxMetadataStringLength = 4096
+
+    /// Initial buffer pre-allocation cap for `extractCapped` (4 MB) so crafted declared sizes
+    /// cannot trigger huge upfront allocations before streaming begins.
+    private static let maxInitialExtractCapacity = 4 * 1024 * 1024
+
     /// Cap on mesh instances one parse expands build items into. Nested components multiply
     /// (A→1,000×B→1,000×C is a million instances), which the per-file caps cannot bound.
     static let maxEmissions = 100_000
@@ -103,7 +112,8 @@ public enum ThreeMFMeshParser {
         }
         let totalSize = max(entry.uncompressedSize, 1)
         var data = Data()
-        data.reserveCapacity(Int(totalSize))
+        let initialCapacity = min(Int(min(totalSize, UInt64(Int.max))), maxInitialExtractCapacity)
+        data.reserveCapacity(initialCapacity)
         _ = try archive.archive.extract(entry) { chunk in
             // Chunks are large enough that polling every one is free.
             try cancellation?.check()
@@ -269,7 +279,11 @@ public enum ThreeMFMeshParser {
         // namespace, CDATA-wrapped mesh, structurally exotic 3MF), try NSXMLParser
         // on the root model file as a one-shot recovery.
         if result.objectMeshes.isEmpty, result.components.isEmpty, result.buildItems.isEmpty {
-            if let fallback = nsxmlFallback(xmlData: xmlData, limits: limits) {
+            if let fallback = try nsxmlFallback(
+                xmlData: xmlData,
+                limits: limits,
+                cancellation: cancellation
+            ) {
                 log.notice("FastMeshScanner returned empty; using NSXMLParser fallback")
                 progress?(0.8)
                 var mesh = MeshData(
@@ -483,19 +497,34 @@ public enum ThreeMFMeshParser {
                         // Identity transform — skip per-vertex math
                         allVertices.append(contentsOf: mesh.vertices)
                     } else {
-                        allVertices.reserveCapacity(allVertices.count + mesh.vertices.count)
+                        guard transform.allSatisfy(\.isFinite) else { continue }
                         let m = transform
+                        var transformed: [simd_float3] = []
+                        transformed.reserveCapacity(mesh.vertices.count)
+                        var allFinite = true
                         for v in mesh.vertices {
                             let x = (m[0] * v.x) + (m[3] * v.y) + (m[6] * v.z) + m[9]
                             let y = (m[1] * v.x) + (m[4] * v.y) + (m[7] * v.z) + m[10]
                             let z = (m[2] * v.x) + (m[5] * v.y) + (m[8] * v.z) + m[11]
-                            allVertices.append(simd_float3(x, y, z))
+                            guard x.isFinite, y.isFinite, z.isFinite else {
+                                allFinite = false
+                                break
+                            }
+                            transformed.append(simd_float3(x, y, z))
                         }
+                        guard allFinite else { continue }
+                        allVertices.append(contentsOf: transformed)
                     }
                     allIndices.reserveCapacity(allIndices.count + mesh.indices.count)
                     let triBase = allIndices.count / 3
+                    let localVCount = UInt32(mesh.vertices.count)
                     for idx in mesh.indices {
-                        allIndices.append(idx + baseOffset)
+                        if idx < localVCount {
+                            let (offsetIdx, overflow) = idx.addingReportingOverflow(baseOffset)
+                            allIndices.append(overflow ? UInt32.max : offsetIdx)
+                        } else {
+                            allIndices.append(UInt32.max)
+                        }
                     }
                     let triCountThisItem = mesh.indices.count / 3
                     // Color: Bambu assigns one material per object (via extruder); otherwise
@@ -556,9 +585,15 @@ public enum ThreeMFMeshParser {
                       canAppend(verts: mesh.vertices.count, tris: mesh.indices.count / 3) else { continue }
                 let baseOffset = UInt32(allVertices.count)
                 let triBase = allIndices.count / 3
+                let localVCount = UInt32(mesh.vertices.count)
                 allVertices.append(contentsOf: mesh.vertices)
                 for idx in mesh.indices {
-                    allIndices.append(idx + baseOffset)
+                    if idx < localVCount {
+                        let (offsetIdx, overflow) = idx.addingReportingOverflow(baseOffset)
+                        allIndices.append(overflow ? UInt32.max : offsetIdx)
+                    } else {
+                        allIndices.append(UInt32.max)
+                    }
                 }
                 if !mesh.triangleMaterials.isEmpty {
                     if allTriangleMats.count < triBase {
@@ -687,8 +722,10 @@ public enum ThreeMFMeshParser {
     /// `maxVertices` / `maxTriangles` aggregate caps. Returns nil if it can't recover anything.
     private static func nsxmlFallback(
         xmlData: Data,
-        limits: ResourceLimits
-    ) -> (vertices: [simd_float3], indices: [UInt32])? {
+        limits: ResourceLimits,
+        cancellation: ParseCancellation? = nil
+    ) throws -> (vertices: [simd_float3], indices: [UInt32])? {
+        try cancellation?.check()
         // Internal entity expansion is still on in NSXMLParser — skip the fallback entirely
         // when a DTD or entity declaration is present rather than parsing a bomb.
         if containsDTDOrEntityDeclaration(xmlData) {
@@ -696,7 +733,8 @@ public enum ThreeMFMeshParser {
         }
         let delegate = NSXMLFallbackDelegate(
             maxVertices: limits.maxVertices,
-            maxTriangles: limits.maxTriangles
+            maxTriangles: limits.maxTriangles,
+            cancellation: cancellation
         )
         let parser = XMLParser(data: xmlData)
         parser.delegate = delegate
@@ -704,13 +742,17 @@ public enum ThreeMFMeshParser {
         // Defense-in-depth: never fetch external DTDs/entities. This matches Foundation's
         // default, but we set it explicitly so the XXE-off posture survives future refactors.
         parser.shouldResolveExternalEntities = false
-        guard parser.parse() else { return nil }
+        let parsed = parser.parse()
+        try cancellation?.check()
+        guard parsed else { return nil }
         // Filter out-of-range indices so SceneKit never sees a bad triangle.
         let vCount = UInt32(delegate.vertices.count)
         var safeIndices: [UInt32] = []
         safeIndices.reserveCapacity(delegate.indices.count)
         var t = 0
+        var filterPoller = CancellationPoller(cancellation)
         while t * 3 + 2 < delegate.indices.count {
+            try filterPoller.tick()
             let a = delegate.indices[t * 3]
             let b = delegate.indices[t * 3 + 1]
             let c = delegate.indices[t * 3 + 2]
@@ -759,6 +801,7 @@ public enum ThreeMFMeshParser {
         for comp in componentsByParent[objectId] ?? [] {
             guard budget > 0 else { break }
             let composed = composeTransforms(comp.transform, transform)
+            guard composed.allSatisfy(\.isFinite) else { continue }
             out.append(contentsOf: expandObject(
                 objectId: comp.objectId,
                 transform: composed,
@@ -817,10 +860,12 @@ private final class NSXMLFallbackDelegate: NSObject, XMLParserDelegate {
     private var inMesh = false
     private let maxVertices: Int
     private let maxTriangles: Int
+    private var poller: CancellationPoller
 
-    init(maxVertices: Int, maxTriangles: Int) {
+    init(maxVertices: Int, maxTriangles: Int, cancellation: ParseCancellation? = nil) {
         self.maxVertices = maxVertices
         self.maxTriangles = maxTriangles
+        poller = CancellationPoller(cancellation)
     }
 
     func parser(
@@ -830,6 +875,10 @@ private final class NSXMLFallbackDelegate: NSObject, XMLParserDelegate {
         qualifiedName _: String?,
         attributes attrs: [String: String] = [:]
     ) {
+        if poller.tickIsCancelled() {
+            parser.abortParsing()
+            return
+        }
         let local = elementName.split(separator: ":").last.map(String.init) ?? elementName
         switch local.lowercased() {
         case "mesh":
@@ -1244,7 +1293,7 @@ private struct ByteScanner {
         }
         skipToTagEnd()
 
-        if gotX, gotY, gotZ, totalVertices < limits.maxVertices {
+        if gotX, gotY, gotZ, x.isFinite, y.isFinite, z.isFinite, totalVertices < limits.maxVertices {
             currentVertices.append(simd_float3(x, y, z))
             totalVertices += 1
         }
@@ -1325,9 +1374,8 @@ private struct ByteScanner {
             let effectivePid = pid ?? currentObjectPid
             let effectiveP1 = p1Idx ?? currentObjectPindex
             if let effectivePid, let effectiveP1, let range = materialGroups[effectivePid] {
-                let gIdx = range.lowerBound + effectiveP1
-                if gIdx >= range.lowerBound, gIdx < range.upperBound {
-                    currentTriMaterials.append(gIdx)
+                if effectiveP1 >= 0, effectiveP1 < range.count {
+                    currentTriMaterials.append(range.lowerBound + effectiveP1)
                     hasAnyMaterial = true
                 } else {
                     currentTriMaterials.append(-1)
@@ -1372,6 +1420,10 @@ private struct ByteScanner {
     }
 
     private mutating func parseBaseEntry() {
+        guard materials.count < ThreeMFMeshParser.maxMaterials else {
+            skipToTagEnd()
+            return
+        }
         let attrs = readAttributes(["name", "displaycolor"])
         let name = attrs["name"] ?? ""
         let color = parseHexColor(attrs["displaycolor"])
@@ -1404,15 +1456,21 @@ private struct ByteScanner {
     /// else lands in `metadata.other` so slicer-specific extensions are preserved.
     private mutating func parseMetadataTag() {
         let attrs = readAttributes(["name"])
-        let name = attrs["name"] ?? ""
+        let rawName = attrs["name"] ?? ""
         skipToTagEnd()
         // Capture text up to next '<' (start of close tag).
         let textStart = pos
         _ = skipTo(ByteScanner.lt)
         let textEnd = pos
-        guard !name.isEmpty, textEnd > textStart else { return }
-        let value = stringFromBytes(textStart, textEnd)
+        guard !rawName.isEmpty, textEnd > textStart else { return }
+        let maxLen = ThreeMFMeshParser.maxMetadataStringLength
+        let name = rawName.count > maxLen ? String(rawName.prefix(maxLen)) : rawName
+        let cappedEnd = min(textEnd, textStart + maxLen * 4)
+        var value = stringFromBytes(textStart, cappedEnd)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.count > maxLen {
+            value = String(value.prefix(maxLen))
+        }
         guard !value.isEmpty else { return }
         switch name {
         case "Application": metadata.application = value
@@ -1420,7 +1478,10 @@ private struct ByteScanner {
         case "ModificationDate": metadata.modificationDate = value
         case "Title": metadata.title = value
         case "Designer": metadata.designer = value
-        default: metadata.other[name] = value
+        default:
+            if metadata.other[name] != nil || metadata.other.count < ThreeMFMeshParser.maxMetadataOtherEntries {
+                metadata.other[name] = value
+            }
         }
     }
 
@@ -1607,7 +1668,9 @@ private struct ByteScanner {
             while i < end {
                 let c = base[i]
                 guard c >= 0x30, c <= 0x39 else { break }
-                exp = exp * 10 + Int(c - 0x30)
+                if exp <= 400 {
+                    exp = exp * 10 + Int(c - 0x30)
+                }
                 i += 1
             }
             if expNeg {

@@ -2,13 +2,13 @@
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
   "serialNumber": "urn:uuid:BD2DDBD0-436E-4BD0-A89B-4D6C05637152",
-  "version": 5,
+  "version": 6,
   "metadata": {
-    "timestamp": "2026-10-25T07:30:00Z",
+    "timestamp": "2026-11-25T00:00:00Z",
     "component": {
       "type": "application",
       "name": "threemf",
-      "version": "1.6.2",
+      "version": "1.6.3",
       "description": "Quick Look plugin, Spotlight Importer, Finder Sync extension, and CLI for previewing .3mf, .stl, and .gcode files on macOS",
       "licenses": [
         {

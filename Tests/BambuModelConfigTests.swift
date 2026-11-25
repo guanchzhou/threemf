@@ -197,4 +197,20 @@ struct BambuModelConfigTests {
         #expect(c.filamentColours.isEmpty)
         #expect(!c.hasColorAssignment)
     }
+
+    @Test("BambuPlateInfo guards extreme and negative prediction values before Int cast")
+    func plateInfoExtremePredictionDoesNotTrap() throws {
+        let huge = Data(#"{"title":"Plate 1","prediction":1e30}"#.utf8)
+        let parsedHuge = try #require(BambuPlateInfo.parse(huge))
+        #expect(parsedHuge.title == "Plate 1")
+        #expect(parsedHuge.predictionSeconds == nil)
+
+        let negative = Data(#"{"title":"Plate 2","prediction":-42.5}"#.utf8)
+        let parsedNegative = try #require(BambuPlateInfo.parse(negative))
+        #expect(parsedNegative.predictionSeconds == nil)
+
+        let normal = Data(#"{"title":"Plate 3","prediction":123.6}"#.utf8)
+        let parsedNormal = try #require(BambuPlateInfo.parse(normal))
+        #expect(parsedNormal.predictionSeconds == 124)
+    }
 }

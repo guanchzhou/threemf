@@ -22,10 +22,29 @@ public enum ThreeMFExtractor {
     /// Maximum allowed thumbnail size (10 MB) to prevent ZIP bomb attacks
     private static let maxThumbnailSize = 10 * 1024 * 1024
 
+    /// Aggregate decompression byte budget across all thumbnail candidates in one call (24 MB).
+    static let maxAggregateExtractBytes = 24 * 1024 * 1024
+
     /// Cap on *candidate* thumbnail paths considered during the extractThumbnail fallback.
     /// Only paths under `metadata/` / `thumbnail/` with a `.png` suffix count; model entries
     /// do not. Bounds extraction attempts, not directory walks.
-    private static let maxFallbackCandidates = 256
+    static let maxFallbackCandidates = 32
+
+    private final class ExtractionBudget {
+        private(set) var remaining: Int
+
+        init(_ total: Int) {
+            remaining = total
+        }
+
+        func consume(_ byteCount: Int) throws {
+            guard byteCount >= 0, byteCount <= remaining else {
+                remaining = 0
+                throw ThreeMFExtractorError.thumbnailTooLarge
+            }
+            remaining -= byteCount
+        }
+    }
 
     private static let knownThumbnailPaths = [
         "Metadata/plate_1.png",
@@ -42,25 +61,45 @@ public enum ThreeMFExtractor {
         "3D/Metadata/thumbnail.png",
     ]
 
-    public static func extractThumbnail(from fileURL: URL) throws -> Data {
+    public static func extractThumbnail(
+        from fileURL: URL,
+        cancellation: ParseCancellation? = nil
+    ) throws -> Data {
+        try cancellation?.check()
         let archive: ThreeMFArchive
         do {
             archive = try ThreeMFArchive(url: fileURL)
         } catch {
             throw ThreeMFExtractorError.cannotOpenArchive
         }
-        return try extractThumbnail(from: archive)
+        return try extractThumbnail(from: archive, cancellation: cancellation)
     }
 
     /// Returns the first candidate that extracts and validates as a PNG. A corrupt or oversized
-    /// candidate does not end the search; the error is thrown only once every candidate failed.
-    static func extractThumbnail(from archive: ThreeMFArchive) throws -> Data {
+    /// candidate does not end the search until the aggregate decompression budget is exhausted;
+    /// cancellation aborts immediately.
+    static func extractThumbnail(
+        from archive: ThreeMFArchive,
+        cancellation: ParseCancellation? = nil,
+        aggregateByteBudget: Int = maxAggregateExtractBytes
+    ) throws -> Data {
         var sawTooLarge = false
         var tried = Set<String>()
+        let budget = ExtractionBudget(aggregateByteBudget)
 
-        func attempt(_ entry: Entry) -> Data? {
+        func attempt(_ entry: Entry) throws -> Data? {
+            try cancellation?.check()
             do {
-                return try validatedPNG(extractThumbnailEntry(entry, from: archive))
+                return try validatedPNG(
+                    extractThumbnailEntry(
+                        entry,
+                        from: archive,
+                        budget: budget,
+                        cancellation: cancellation
+                    )
+                )
+            } catch is CancellationError {
+                throw CancellationError()
             } catch ThreeMFExtractorError.thumbnailTooLarge {
                 sawTooLarge = true
             } catch {}
@@ -68,9 +107,11 @@ public enum ThreeMFExtractor {
         }
 
         for path in knownThumbnailPaths {
+            try cancellation?.check()
+            guard budget.remaining > 0 else { break }
             guard let entry = archive.entry(path) else { continue }
             tried.insert(path)
-            if let data = attempt(entry) {
+            if let data = try attempt(entry) {
                 return data
             }
         }
@@ -78,6 +119,8 @@ public enum ThreeMFExtractor {
         // Fallback: any PNG in thumbnail-like directories, in central-directory order.
         var candidates = 0
         for entry in archive.entries {
+            try cancellation?.check()
+            guard budget.remaining > 0 else { break }
             let path = entry.path.lowercased()
             guard path.hasSuffix(".png"),
                   path.hasPrefix("metadata/") || path.hasPrefix("thumbnail/"),
@@ -88,7 +131,7 @@ public enum ThreeMFExtractor {
                 break
             }
             tried.insert(entry.path)
-            if let data = attempt(entry) {
+            if let data = try attempt(entry) {
                 return data
             }
         }
@@ -96,16 +139,27 @@ public enum ThreeMFExtractor {
         throw sawTooLarge ? ThreeMFExtractorError.thumbnailTooLarge : ThreeMFExtractorError.noThumbnailFound
     }
 
-    private static func extractThumbnailEntry(_ entry: Entry, from archive: ThreeMFArchive) throws -> Data {
+    private static func extractThumbnailEntry(
+        _ entry: Entry,
+        from archive: ThreeMFArchive,
+        budget: ExtractionBudget? = nil,
+        cancellation: ParseCancellation? = nil
+    ) throws -> Data {
+        try cancellation?.check()
         guard entry.uncompressedSize <= UInt64(maxThumbnailSize) else {
+            throw ThreeMFExtractorError.thumbnailTooLarge
+        }
+        if let budget, entry.uncompressedSize > UInt64(budget.remaining) {
             throw ThreeMFExtractorError.thumbnailTooLarge
         }
         var data = Data()
         _ = try archive.archive.extract(entry) { chunk in
-            data.append(chunk)
-            if data.count > maxThumbnailSize {
+            try cancellation?.check()
+            if data.count + chunk.count > maxThumbnailSize {
                 throw ThreeMFExtractorError.thumbnailTooLarge
             }
+            try budget?.consume(chunk.count)
+            data.append(chunk)
         }
         return data
     }

@@ -32,6 +32,19 @@ final class BoundedFileReaderTests: XCTestCase {
         XCTAssertEqual(data, payload)
     }
 
+    func testRead_rejectsDirectoryAndFIFO() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bounded-dir-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        XCTAssertThrowsError(try BoundedFileReader.dataContents(of: dir, maxByteCount: 1024))
+
+        let fifo = dir.appendingPathComponent("pipe")
+        XCTAssertEqual(mkfifo(fifo.path, 0o600), 0)
+        XCTAssertThrowsError(try BoundedFileReader.dataContents(of: fifo, maxByteCount: 1024))
+    }
+
     func testSTLParser_rejectsSparseOversizeFromStat() throws {
         let url = sparseFileURL(ext: "stl", logicalSize: Int64(STLParser.maxFileSize) + 1)
         defer { try? FileManager.default.removeItem(at: url) }

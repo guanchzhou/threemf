@@ -177,7 +177,7 @@ public enum SceneBuilder {
             let i0 = mesh.indices[t * 3]
             let i1 = mesh.indices[t * 3 + 1]
             let i2 = mesh.indices[t * 3 + 2]
-            groups[m, default: []].append(contentsOf: [i0, i1, i2])
+            appendTriangle(&groups[m, default: []], i0, i1, i2)
         }
 
         // Stable order: default group (-1) first, then materials in ascending order.
@@ -197,6 +197,13 @@ public enum SceneBuilder {
         }
     }
 
+    @inline(__always)
+    private static func appendTriangle(_ indices: inout [UInt32], _ i0: UInt32, _ i1: UInt32, _ i2: UInt32) {
+        indices.append(i0)
+        indices.append(i1)
+        indices.append(i2)
+    }
+
     /// Materials in the same order as elements emitted by `makeElements`.
     private static func makeMaterials(mesh: MeshData, elementCount _: Int) -> [SCNMaterial] {
         let defaultMaterial = makeDefaultMaterial()
@@ -205,18 +212,17 @@ public enum SceneBuilder {
             return [defaultMaterial]
         }
 
-        // Re-derive ordered keys the same way `makeElements` did.
-        var seen = Set<Int>()
+        // Re-derive ordered keys in O(N + M log M) by deduplicating before sorting.
+        var unique = Set<Int>()
+        for m in mesh.triangleMaterials {
+            unique.insert(m)
+        }
         var orderedKeys: [Int] = []
-        if mesh.triangleMaterials.contains(-1) {
-            seen.insert(-1)
+        orderedKeys.reserveCapacity(unique.count)
+        if unique.remove(-1) != nil {
             orderedKeys.append(-1)
         }
-        for m in mesh.triangleMaterials.sorted() where m >= 0 {
-            if seen.insert(m).inserted {
-                orderedKeys.append(m)
-            }
-        }
+        orderedKeys.append(contentsOf: unique.filter { $0 >= 0 }.sorted())
 
         return orderedKeys.map { key in
             if key == -1 {

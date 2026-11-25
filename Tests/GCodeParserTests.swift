@@ -369,4 +369,48 @@ final class GCodeParserTests: XCTestCase {
         let extrudeLayers = toolpath.segments.filter(\.extrudes).map(\.layerIndex)
         XCTAssertEqual(extrudeLayers, [0, 0, 1])
     }
+
+    func testParse_extremeCommandNumberAndExponent_doNotTrap() throws {
+        let gcode = """
+        G99999999999999999999999999 X10 Y10
+        M99999999999999999999999999 S200
+        G0 X0 Y0 Z0.2
+        G1 X1e9999999999999999999999 Y0 E1
+        G1 X1e-9999999999999999999999 Y5 E1
+        G1 X10 Y5 E2
+        """
+        let url = try writeTempFile(string: gcode)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let toolpath = try GCodeParser.parse(from: url)
+        XCTAssertEqual(toolpath.segments.count, 3)
+        XCTAssertEqual(toolpath.segments[1].end.x, 0, accuracy: 1e-6)
+        XCTAssertEqual(toolpath.segments[2].end.x, 10, accuracy: 1e-3)
+    }
+
+    func testParse_hugeArcRadius_clampsBeforeIntCastWithoutTrapping() throws {
+        // 1) I1e18 -> finite arcRadius (1e18^2 = 1e36 fits in Float), rawSegs (~2.5e19) > Int.max;
+        //    Double calculation + pre-Int clamp must avoid trapping and cap at maxSegmentsPerArc.
+        let gcodeFiniteOverflow = """
+        G0 X0 Y0 Z0.2
+        G2 X10 Y0 I1e18 J0 E1 F600
+        """
+        let url1 = try writeTempFile(string: gcodeFiniteOverflow)
+        defer { try? FileManager.default.removeItem(at: url1) }
+
+        let tp1 = try GCodeParser.parse(from: url1)
+        XCTAssertGreaterThan(tp1.segments.count, 1)
+        XCTAssertLessThanOrEqual(tp1.segments.count, 16385)
+
+        // 2) I1e38 -> simd_length overflows Float to +Inf; must skip cleanly without trapping.
+        let gcodeInfRadius = """
+        G0 X0 Y0 Z0.2
+        G2 X10 Y0 I1e38 J0 E1 F600
+        """
+        let url2 = try writeTempFile(string: gcodeInfRadius)
+        defer { try? FileManager.default.removeItem(at: url2) }
+
+        let tp2 = try GCodeParser.parse(from: url2)
+        XCTAssertEqual(tp2.segments.count, 1)
+    }
 }
