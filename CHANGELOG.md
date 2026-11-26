@@ -14,6 +14,7 @@ All notable changes to threemf are documented here. Format: Keep a Changelog. Ve
 
 ### Fixed
 - **Finder thumbnails from embedded PNGs were drawn at a quarter of their size**: `renderImageThumbnail` sized the reply in pixels but the Quick Look drawing context is in backing pixels while `contextSize` is in points, so on a Retina display the model sat in the bottom-left corner of the icon. The reply is now sized in points and drawn into `contextSize × request.scale`.
+- **Quick Look for Shapr3D-typed `.3mf` files**: the preview, thumbnail, and Spotlight importer also accept `com.shapr3d.3d-manufacturing.3mf`. With Shapr3D installed, macOS resolves `.3mf` to that type system-wide, so no 3MF file got a threemf preview or thumbnail.
 
 ### Performance
 - **Faster SceneKit geometry assembly**: `SceneBuilder` discovers active materials with `Set<Int>` and groups triangle indices without intermediate allocations.
