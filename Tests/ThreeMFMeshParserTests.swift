@@ -1144,7 +1144,7 @@ class ThreeMFMeshParserTests: XCTestCase {
         let geometry = modelNode?.geometry
         // Unique IDs sorted ascending: [-1, 0, 2] -> 3 elements (1, 1, 2 triangles).
         XCTAssertEqual(geometry?.elements.count, 3)
-        XCTAssertEqual(geometry?.elements.map { $0.primitiveCount }, [1, 1, 2])
+        XCTAssertEqual(geometry?.elements.map(\.primitiveCount), [1, 1, 2])
         XCTAssertEqual(geometry?.materials.count, 3)
     }
 }

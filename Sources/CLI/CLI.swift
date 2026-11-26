@@ -409,9 +409,9 @@ enum CLI {
     /// sees "unsupported format" rather than a misleading downstream 3MF/ZIP parse error.
     static func resolveFormat(_ url: URL) throws -> FileFormat {
         switch url.pathExtension.lowercased() {
-        case "stl": return .stl
-        case "gcode": return .gcode
-        case "3mf", "": return .threemf
+        case "stl": .stl
+        case "gcode": .gcode
+        case "3mf", "": .threemf
         case let other: throw CLIError.unsupportedFormat(other)
         }
     }

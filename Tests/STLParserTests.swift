@@ -436,7 +436,7 @@ class STLParserTests: XCTestCase {
 
     func testParseBinarySTLParallel_rejectsNonFiniteTriangles() throws {
         // Exercises parseBinaryParallel directly with a mix of finite and non-finite triangles.
-        let triCount = 60_000
+        let triCount = 60000
         var tris: [Triangle] = []
         tris.reserveCapacity(triCount)
         tris.append(Triangle(normal: (0, 0, 1), v1: (.nan, 0, 0), v2: (1, 0, 0), v3: (0, 1, 0)))

@@ -135,14 +135,17 @@ struct MeshDataPilotTests {
     @Test("parallelNormalChunkCount enforces scratch memory budget and avoids overflow")
     func parallelNormalChunkBudget() {
         // Below triangle threshold -> serial (1 chunk).
-        #expect(MeshData.parallelNormalChunkCount(vertexCount: 1000, triangleCount: 10_000, processorCount: 8) == 1)
+        #expect(MeshData.parallelNormalChunkCount(vertexCount: 1000, triangleCount: 10000, processorCount: 8) == 1)
         // Small vertex count with many triangles -> parallel chunks up to budget and cores*2.
-        #expect(MeshData.parallelNormalChunkCount(vertexCount: 10_000, triangleCount: 200_000, processorCount: 8) == 8)
+        #expect(MeshData.parallelNormalChunkCount(vertexCount: 10000, triangleCount: 200_000, processorCount: 8) == 8)
         // 2M vertices * 16 bytes = 32 MB per chunk -> budget allows at most 1 chunk (serial fallback).
-        #expect(MeshData.parallelNormalChunkCount(vertexCount: 2_000_000, triangleCount: 500_000, processorCount: 16) == 1)
+        #expect(MeshData
+            .parallelNormalChunkCount(vertexCount: 2_000_000, triangleCount: 500_000, processorCount: 16) == 1)
         // 1M vertices * 16 bytes = 16 MB per chunk -> budget caps at 2 chunks even on 16 cores.
-        #expect(MeshData.parallelNormalChunkCount(vertexCount: 1_000_000, triangleCount: 500_000, processorCount: 16) == 2)
+        #expect(MeshData
+            .parallelNormalChunkCount(vertexCount: 1_000_000, triangleCount: 500_000, processorCount: 16) == 2)
         // Overflowing vertex count -> safely returns 1 instead of trapping.
-        #expect(MeshData.parallelNormalChunkCount(vertexCount: Int.max, triangleCount: 500_000, processorCount: 16) == 1)
+        #expect(MeshData
+            .parallelNormalChunkCount(vertexCount: Int.max, triangleCount: 500_000, processorCount: 16) == 1)
     }
 }

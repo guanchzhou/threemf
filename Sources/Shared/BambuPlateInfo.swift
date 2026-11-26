@@ -51,10 +51,8 @@ public struct BambuPlateInfo: Sendable, Hashable {
             if p >= 0, p <= 3_153_600_000 {
                 prediction = p
             }
-        } else if let p = object["prediction"] as? Double {
-            if p.isFinite, p >= 0, p <= 3_153_600_000 {
-                prediction = Int(p.rounded())
-            }
+        } else if let p = object["prediction"] as? Double, p.isFinite, p >= 0, p <= 3_153_600_000 {
+            prediction = Int(p.rounded())
         }
 
         let info = BambuPlateInfo(
