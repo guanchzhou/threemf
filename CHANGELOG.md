@@ -4,6 +4,9 @@ All notable changes to threemf are documented here. Format: Keep a Changelog. Ve
 
 ## [Unreleased]
 
+### Fixed
+- **Quick Look for Shapr3D-typed `.3mf` files**: the preview, thumbnail, and Spotlight importer also accept `com.shapr3d.3d-manufacturing.3mf`, the type Shapr3D registers for `.3mf`, so previews work when Shapr3D is installed (#26).
+
 ## [1.6.3] - 2026-11-25
 
 ### Security
