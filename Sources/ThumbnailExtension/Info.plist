@@ -32,6 +32,7 @@
 			<array>
 				<string>com.andreymaltsev.threemf</string>
 				<string>com.bambulab.3mf</string>
+				<string>com.shapr3d.3d-manufacturing.3mf</string>
 				<string>com.andreymaltsev.gcode</string>
 				<string>public.standard-tesselated-geometry-format</string>
 			</array>
